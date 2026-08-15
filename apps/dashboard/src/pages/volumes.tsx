@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Plus, Trash2, Loader2 } from "lucide-react";
+import { HardDrive, Plus, Trash2, Loader2, Server as ServerIcon } from "lucide-react";
 import { get, post, del } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,34 +13,45 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/toast";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, shortId } from "@/lib/format";
 import type { Server, VolumeInfo } from "@nexus/types";
+
+/** A volume plus the server it lives on, so actions can target the right host. */
+interface VolumeRow extends VolumeInfo {
+  serverId: string;
+  serverName: string;
+}
 
 export function VolumesPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [serverId, setServerId] = useState("");
+  const [serverFilter, setServerFilter] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [toRemove, setToRemove] = useState<VolumeInfo | null>(null);
+  const [toRemove, setToRemove] = useState<VolumeRow | null>(null);
   const [removing, setRemoving] = useState(false);
 
   const { data: servers } = useQuery({ queryKey: ["servers"], queryFn: () => get<{ items: Server[] }>("/servers") });
-  const effectiveServer = serverId || servers?.items.find((s) => s.status === "ONLINE")?.id || "";
 
   const { data, isLoading } = useQuery({
-    queryKey: ["volumes", effectiveServer],
-    queryFn: () => get<{ items: { serverId: string; volumes: VolumeInfo[] }[] }>("/volumes", { serverId: effectiveServer }),
-    enabled: !!effectiveServer,
+    queryKey: ["volumes", serverFilter],
+    queryFn: () => get<{ items: { serverId: string; volumes: VolumeInfo[] }[] }>("/volumes", { serverId: serverFilter }),
+    enabled: true,
     refetchInterval: 15000,
   });
-  const volumes = (data?.items ?? []).flatMap((g) => g.volumes ?? []);
+  const serverName = (id: string) => servers?.items.find((s) => s.id === id)?.name ?? shortId(id);
+  const volumes: VolumeRow[] = (data?.items ?? []).flatMap((g) =>
+    (g.volumes ?? []).map((v) => ({ ...v, serverId: g.serverId, serverName: serverName(g.serverId) })),
+  );
+
+  // Create targets a specific server: the selected filter, or the first online one.
+  const createServerId = serverFilter || servers?.items.find((s) => s.status === "ONLINE")?.id || "";
 
   const create = async () => {
     setCreating(true);
     try {
-      await post("/volumes", { serverId: effectiveServer, name });
+      await post("/volumes", { serverId: createServerId, name });
       queryClient.invalidateQueries({ queryKey: ["volumes"] });
       toast("success", "Volume created", name);
       setCreateOpen(false);
@@ -56,9 +67,9 @@ export function VolumesPage() {
     if (!toRemove) return;
     setRemoving(true);
     try {
-      await del(`/volumes/${toRemove.name}`, { serverId: effectiveServer, force: "true" });
+      await del(`/volumes/${toRemove.name}`, { serverId: toRemove.serverId, force: "true" });
       queryClient.invalidateQueries({ queryKey: ["volumes"] });
-      toast("success", "Volume removed", toRemove.name);
+      toast("success", "Volume removed", `${toRemove.name} · ${toRemove.serverName}`);
       setToRemove(null);
     } catch (err) {
       toast("error", "Remove failed", err instanceof Error ? err.message : "Unknown error");
@@ -71,17 +82,20 @@ export function VolumesPage() {
     <div className="p-6">
       <PageHeader
         title="Volumes"
-        description="Persistent storage available on the selected server."
+        description="Persistent storage across your online servers — including application and database volumes."
         actions={
           <div className="flex gap-2">
             <CustomSelect
-              value={effectiveServer}
-              options={(servers?.items ?? []).map((s) => ({ value: s.id, label: s.name, description: s.status }))}
-              onChange={(v) => setServerId(v)}
-              placeholder="Select a server"
+              value={serverFilter}
+              options={[
+                { value: "", label: "All servers", description: "every online server" },
+                ...(servers?.items ?? []).map((s) => ({ value: s.id, label: s.name, description: s.status })),
+              ]}
+              onChange={(v) => setServerFilter(v)}
+              placeholder="All servers"
               className="w-56"
             />
-            <Button onClick={() => setCreateOpen(true)} disabled={!effectiveServer}>
+            <Button onClick={() => setCreateOpen(true)} disabled={!createServerId}>
               <Plus className="size-4" /> Create
             </Button>
           </div>
@@ -96,14 +110,19 @@ export function VolumesPage() {
         <Card className="overflow-hidden">
           <div className="divide-y divide-border/50">
             {volumes.map((v) => (
-              <div key={v.name} className="flex items-center gap-4 px-5 py-3">
+              <div key={`${v.serverId}:${v.name}`} className="flex items-center gap-4 px-5 py-3">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                   <HardDrive className="size-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{v.name}</p>
+                  <p className="flex items-center gap-2 truncate text-sm font-semibold">
+                    <span className="truncate">{v.name}</span>
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      <ServerIcon className="size-3" /> {v.serverName}
+                    </span>
+                  </p>
                   <p className="truncate text-[11px] text-muted-foreground">
-                    {v.driver} · {formatBytes(v.sizeBytes)} · {(v.usedBy ?? []).length ? `used by ${(v.usedBy ?? []).join(", ")}` : "not in use"}
+                    {v.driver} · {v.sizeBytes != null ? formatBytes(v.sizeBytes) : "unknown size"} · {(v.usedBy ?? []).length ? `used by ${(v.usedBy ?? []).join(", ")}` : "not in use"}
                   </p>
                 </div>
                 {(v.usedBy ?? []).length === 0 ? (
@@ -122,7 +141,7 @@ export function VolumesPage() {
       <Modal isOpen={createOpen} onClose={() => setCreateOpen(false)} maxWidth="440px">
         <div className="p-6">
           <h2 className="text-sm font-semibold">Create volume</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Created on {servers?.items.find((s) => s.id === effectiveServer)?.name}.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Created on {servers?.items.find((s) => s.id === createServerId)?.name ?? "selected server"}.</p>
           <div className="mt-5 space-y-1.5">
             <Label>Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nexus-data" autoFocus onKeyDown={(e) => e.key === "Enter" && create()} />

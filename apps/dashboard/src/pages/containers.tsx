@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Box, Play, Square, RotateCw, Pause, PlayCircle, Trash2, Terminal } from "lucide-react";
+import { Box, Play, Square, RotateCw, Pause, PlayCircle, Trash2, Terminal, Server as ServerIcon } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,35 +24,45 @@ const ACTIONS: { action: string; label: string; icon: React.ElementType; confirm
   { action: "remove", label: "Remove", icon: Trash2, confirm: true },
 ];
 
+/** A container plus the server it lives on, so actions can target the right host. */
+interface ContainerRow extends ContainerInfo {
+  serverId: string;
+  serverName: string;
+}
+
 export function ContainersPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [serverId, setServerId] = useState("");
-  const [actionTarget, setActionTarget] = useState<{ action: string; container: ContainerInfo } | null>(null);
+  const [serverFilter, setServerFilter] = useState("");
+  const [actionTarget, setActionTarget] = useState<{ action: string; container: ContainerRow } | null>(null);
   const [working, setWorking] = useState(false);
-  const [execTarget, setExecTarget] = useState<ContainerInfo | null>(null);
+  const [execTarget, setExecTarget] = useState<ContainerRow | null>(null);
   const [execCmd, setExecCmd] = useState("sh");
   const [execOut, setExecOut] = useState("");
   const [executing, setExecuting] = useState(false);
 
   const { data: servers } = useQuery({ queryKey: ["servers"], queryFn: () => get<{ items: Server[] }>("/servers") });
-  const effectiveServer = serverId || servers?.items.find((s) => s.status === "ONLINE")?.id || "";
 
+  // Empty filter = all online servers (the API aggregates when serverId is omitted).
   const { data, isLoading } = useQuery({
-    queryKey: ["containers", effectiveServer],
-    queryFn: () => get<{ items: { serverId: string; containers: ContainerInfo[] }[] }>("/containers", { serverId: effectiveServer }),
-    enabled: !!effectiveServer,
+    queryKey: ["containers", serverFilter],
+    queryFn: () => get<{ items: { serverId: string; containers: ContainerInfo[] }[] }>("/containers", { serverId: serverFilter }),
+    enabled: true,
     refetchInterval: 8000,
   });
-  const containers = (data?.items ?? []).flatMap((g) => g.containers ?? []);
+  const serverName = (id: string) => servers?.items.find((s) => s.id === id)?.name ?? shortId(id);
+  const rows: ContainerRow[] = (data?.items ?? []).flatMap((g) =>
+    (g.containers ?? []).map((c) => ({ ...c, serverId: g.serverId, serverName: serverName(g.serverId) })),
+  );
 
   const runAction = async () => {
     if (!actionTarget) return;
     setWorking(true);
     try {
-      await post(`/containers/${actionTarget.container.id}/${actionTarget.action}`, { force: true, volumes: actionTarget.action === "remove" }, { serverId: effectiveServer });
+      const { container, action } = actionTarget;
+      await post(`/containers/${container.id}/${action}`, { force: true, volumes: action === "remove" }, { serverId: container.serverId });
       queryClient.invalidateQueries({ queryKey: ["containers"] });
-      toast("success", `${actionTarget.action} requested`, actionTarget.container.name);
+      toast("success", `${action} requested`, `${container.name} · ${container.serverName}`);
     } catch (err) {
       toast("error", "Action failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -66,7 +76,7 @@ export function ContainersPage() {
     setExecuting(true);
     setExecOut("");
     try {
-      const res = await post<{ output: string; exitCode: number }>(`/containers/${execTarget.id}/exec`, { cmd: execCmd.split(/\s+/).filter(Boolean) }, { serverId: effectiveServer });
+      const res = await post<{ output: string; exitCode: number }>(`/containers/${execTarget.id}/exec`, { cmd: execCmd.split(/\s+/).filter(Boolean) }, { serverId: execTarget.serverId });
       setExecOut(res.output);
     } catch (err) {
       setExecOut(err instanceof Error ? err.message : "exec failed");
@@ -79,13 +89,16 @@ export function ContainersPage() {
     <div className="p-6">
       <PageHeader
         title="Containers"
-        description="Every container running on the selected server."
+        description="Every container across your online servers."
         actions={
           <CustomSelect
-            value={effectiveServer}
-            options={(servers?.items ?? []).map((s) => ({ value: s.id, label: s.name, description: s.status }))}
-            onChange={(v) => setServerId(v)}
-            placeholder="Select a server"
+            value={serverFilter}
+            options={[
+              { value: "", label: "All servers", description: "every online server" },
+              ...(servers?.items ?? []).map((s) => ({ value: s.id, label: s.name, description: s.status })),
+            ]}
+            onChange={(v) => setServerFilter(v)}
+            placeholder="All servers"
             className="w-56"
           />
         }
@@ -93,18 +106,23 @@ export function ContainersPage() {
 
       {isLoading ? (
         <TableSkeleton rows={8} cols={5} />
-      ) : !containers.length ? (
-        <EmptyState icon={<Box className="size-5" />} title="No containers" description="Containers on this server will appear here — deploy an application or create a database." />
+      ) : !rows.length ? (
+        <EmptyState icon={<Box className="size-5" />} title="No containers" description="Containers across your servers will appear here — deploy an application or create a database." />
       ) : (
         <Card className="overflow-hidden">
           <div className="divide-y divide-border/50">
-            {containers.map((c) => (
-              <div key={c.id} className="flex items-center gap-4 px-5 py-3">
+            {rows.map((c) => (
+              <div key={`${c.serverId}:${c.id}`} className="flex items-center gap-4 px-5 py-3">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                   <Box className="size-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{c.name}</p>
+                  <p className="flex items-center gap-2 truncate text-sm font-semibold">
+                    <span className="truncate">{c.name}</span>
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      <ServerIcon className="size-3" /> {c.serverName}
+                    </span>
+                  </p>
                   <p className="truncate text-[11px] text-muted-foreground">
                     {c.image} · {shortId(c.id)} · {(c.ports ?? []).map((p) => (p.publicPort ? `${p.publicPort}:${p.privatePort}` : `${p.privatePort}`)).join(", ") || "no ports"} · {timeAgo(c.created)}
                   </p>
@@ -137,7 +155,7 @@ export function ContainersPage() {
         onConfirm={runAction}
         loading={working}
         title="Remove container"
-        description="The container will be removed from this server. Its volumes are kept unless destroyed separately."
+        description="The container will be removed from its server. Its volumes are kept unless destroyed separately."
         resourceName={actionTarget?.container.name ?? ""}
         confirmLabel="Remove"
       />
@@ -147,7 +165,7 @@ export function ContainersPage() {
           <h2 className="text-sm font-semibold">
             {actionTarget?.action} {actionTarget?.container.name}
           </h2>
-          <p className="mt-1 text-xs text-muted-foreground">The agent will run this operation on the selected server.</p>
+          <p className="mt-1 text-xs text-muted-foreground">The agent will run this operation on {actionTarget?.container.serverName}.</p>
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="outline" onClick={() => setActionTarget(null)}>Cancel</Button>
             <Button onClick={runAction} disabled={working}>
@@ -160,6 +178,7 @@ export function ContainersPage() {
       <Modal isOpen={!!execTarget} onClose={() => setExecTarget(null)} maxWidth="640px">
         <div className="p-6">
           <h2 className="text-sm font-semibold">Exec in {execTarget?.name}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Running on {execTarget?.serverName}.</p>
           <div className="mt-4 flex gap-2">
             <input
               className="flex-1 rounded-xl border border-input bg-background px-3.5 py-2 font-mono text-xs focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
