@@ -11,6 +11,18 @@ import { createGameContainer, removeGame, startGame, stopGame } from "./games/ex
 
 const log = createLogger("agent:handlers");
 
+/**
+ * Reject command arguments containing control characters / null bytes. The
+ * real shell-injection guard is that non-shell exec passes args verbatim (no
+ * shell), but this blocks the remaining pathological input. Pure — exported for
+ * unit tests.
+ */
+export function assertSafeCmdArgs(cmd: string[]): void {
+  for (const c of cmd) {
+    if (/[\u0000-\u001f\u007f]/.test(c)) throw new Error(`invalid command argument: ${JSON.stringify(c)}`);
+  }
+}
+
 export type HandlerContext = {
   docker: DockerService;
   emitEvent: (eventType: string, resourceId: string | undefined, data: Record<string, unknown>) => void;
@@ -71,6 +83,9 @@ const ALLOWED_ACTIONS = new Set<AgentAction>([
   "game.files.mkdir",
   "game.files.delete",
   "game.files.rename",
+  "game.files.copy",
+  "game.files.archive",
+  "game.files.upload",
 ]);
 
 const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1 MB
@@ -206,9 +221,7 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
         // Command arguments are NOT ids — they can contain flags, paths, etc.
         // Only reject control characters / null bytes (shell injection guard
         // lives in docker.exec, which passes args without a shell).
-        for (const c of cmd) {
-          if (/[\u0000-\u001f\u007f]/.test(c)) throw new Error(`invalid command argument: ${JSON.stringify(c)}`);
-        }
+        assertSafeCmdArgs(cmd);
         const res = await docker.exec(id, cmd, {
           stdin: typeof payload.stdin === "string" ? payload.stdin : undefined,
           timeoutMs: Number(payload.timeoutMs ?? 30000),
@@ -410,7 +423,11 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
       }
 
       case "game.create": {
-        const result = await createGameContainer(docker, payload as never, (msg) => emitEvent("job.progress", String(payload.gameServerId ?? ""), { message: msg }));
+        const gameId = String(payload.gameServerId ?? "");
+        const result = await createGameContainer(docker, payload as never, (msg) => {
+          emitEvent("job.progress", gameId, { message: msg });
+          emitEvent("resource.log", gameId, { resourceType: "game", message: msg });
+        });
         ctx.sendResult(requestId, result);
         return;
       }
@@ -461,6 +478,21 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
       case "game.files.rename": {
         const { renameGameFile } = await import("./games/files");
         ctx.sendResult(requestId, await renameGameFile(docker, payload as never));
+        return;
+      }
+      case "game.files.copy": {
+        const { copyGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await copyGameFile(docker, payload as never));
+        return;
+      }
+      case "game.files.archive": {
+        const { archiveGamePath } = await import("./games/files");
+        ctx.sendResult(requestId, await archiveGamePath(docker, payload as never));
+        return;
+      }
+      case "game.files.upload": {
+        const { uploadGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await uploadGameFile(docker, payload as never));
         return;
       }
 

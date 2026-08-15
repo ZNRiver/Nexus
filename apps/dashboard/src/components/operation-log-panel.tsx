@@ -6,7 +6,7 @@ import { subscribeDashboard } from "@/lib/ws";
 import { cn } from "@/lib/utils";
 import type { ResourceLogEntry } from "@nexus/types";
 
-export type ResourceLogType = "database" | "application" | "backup";
+export type ResourceLogType = "database" | "application" | "backup" | "game";
 
 /**
  * Dark terminal-style panel that streams operation progress for a resource

@@ -124,7 +124,10 @@ export type AgentAction =
   | "game.files.write"
   | "game.files.mkdir"
   | "game.files.delete"
-  | "game.files.rename";
+  | "game.files.rename"
+  | "game.files.copy"
+  | "game.files.archive"
+  | "game.files.upload";
 
 export interface ApiAgentRequest {
   type: "request";
@@ -367,6 +370,32 @@ export interface GameFileRenamePayload {
   newName: string;
 }
 
+export interface GameFileCopyPayload {
+  containerId: string;
+  path: string;
+}
+
+export interface GameFileArchivePayload {
+  volumeName: string;
+  /** path inside the volume (absolute, /data-rooted) to archive */
+  path: string;
+  fileName: string;
+}
+
+export interface GameFileUploadPayload {
+  containerId: string;
+  /** final path inside the volume (absolute, /data-rooted) */
+  path: string;
+  /** unique temp file name for the chunked write */
+  fileName: string;
+  /** base64 chunk */
+  data: string;
+  /** byte offset for the chunk */
+  offset: number;
+  /** last chunk — copy the temp file into the container volume */
+  final: boolean;
+}
+
 /* ── Registry of typed results for each action ───────────────────── */
 export interface AgentActionResultMap {
   "system.info": ServerSystemInfo;
@@ -442,4 +471,7 @@ export interface AgentActionResultMap {
   "game.files.mkdir": { path: string };
   "game.files.delete": { path: string };
   "game.files.rename": { from: string; to: string };
+  "game.files.copy": { from: string; to: string };
+  "game.files.archive": { path: string; sizeBytes: number };
+  "game.files.upload": { written: number; total: number };
 }

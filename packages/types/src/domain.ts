@@ -223,7 +223,7 @@ export interface DeploymentLogEntry {
 /** Progress log line for any resource operation (create/deploy/backup/restore). */
 export interface ResourceLogEntry {
   id: string;
-  resourceType: "database" | "application" | "backup";
+  resourceType: "database" | "application" | "backup" | "game";
   resourceId: string;
   stream: "stdout" | "stderr" | "system";
   message: string;
@@ -463,6 +463,17 @@ export interface ContainerMetric {
   networkTxBytes?: number;
 }
 
+/** Actual per-container state reported by the agent (used to reconcile resource status). */
+export interface ManagedContainerState {
+  id: string;
+  name: string;
+  state: "created" | "running" | "paused" | "restarting" | "exited" | "dead" | "removing" | "unknown";
+  /** `nexus.type` label — which kind of resource this container belongs to. */
+  type?: string;
+  /** `nexus.application` / `nexus.database` / `nexus.game` label value. */
+  resourceId?: string;
+}
+
 export interface SystemMetrics {
   cpuPercent: number;
   memoryUsedBytes: number;
@@ -480,6 +491,8 @@ export interface SystemMetrics {
   containersRunning: number;
   containersTotal: number;
   containerStats: ContainerMetric[];
+  /** Actual state of every managed container (has `nexus.managed=true` label). */
+  managedContainers?: ManagedContainerState[];
 }
 
 export interface MetricsPoint {
@@ -503,6 +516,7 @@ export type JobType =
   | "image-pull"
   | "server-sync"
   | "game-server-create"
+  | "game-server-reinstall"
   | "game-backup"
   | "cleanup";
 

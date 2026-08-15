@@ -2,7 +2,7 @@ import type { DbConnection } from "@nexus/database";
 import type { ResourceLogEntry } from "@nexus/types";
 import { eventHub } from "../lib/events";
 
-export type ResourceLogType = "database" | "application" | "backup";
+export type ResourceLogType = "database" | "application" | "backup" | "game";
 
 /**
  * Appends a progress log line for a resource operation and streams it to the

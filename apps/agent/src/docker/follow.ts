@@ -22,7 +22,7 @@ export function startContainerLogFollow(
   stopContainerLogFollow(payload.streamId);
 
   let ended = false;
-  const handle = docker.followLogs(
+  void docker.followLogs(
     payload.id,
     payload.tail ?? 200,
     (line) => onLine(payload.streamId, line),
@@ -32,14 +32,24 @@ export function startContainerLogFollow(
       streams.delete(payload.streamId);
       onEnd(payload.streamId);
     },
-  );
-  streams.set(payload.streamId, {
-    stop: () => {
-      if (ended) return;
-      ended = true;
-      streams.delete(payload.streamId);
+  ).then((handle) => {
+    if (ended) {
       handle.stop();
-    },
+      return;
+    }
+    streams.set(payload.streamId, {
+      stop: () => {
+        if (ended) return;
+        ended = true;
+        streams.delete(payload.streamId);
+        handle.stop();
+      },
+    });
+  }).catch(() => {
+    if (ended) return;
+    ended = true;
+    streams.delete(payload.streamId);
+    onEnd(payload.streamId);
   });
 }
 

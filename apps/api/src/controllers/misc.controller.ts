@@ -170,6 +170,20 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...stats });
   });
 
+  app.patch("/api/v1/game-servers/:id", requireAuth, requireGamePerm(), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ name: z.string().min(2).optional() }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const gameServer = await games.update(pid(c), parsed.data);
+    return c.json({ success: true, gameServer });
+  });
+
+  app.post("/api/v1/game-servers/:id/reinstall", requireAuth, requireGamePerm("startstop"), async (c) => {
+    // Async — enqueues a job; the panel streams progress via resource logs.
+    const { jobId } = await games.reinstall(pid(c));
+    return c.json({ success: true, jobId });
+  });
+
   app.delete("/api/v1/game-servers/:id", requireAuth, requirePermission("game.delete"), async (c) => {
     const destroy = c.req.query("destroy") === "true";
     await games.remove(pid(c), { destroyData: destroy });
@@ -221,6 +235,69 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
     const result = await games.renameFile(pid(c), parsed.data.path, parsed.data.newName);
     return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/files/copy", requireAuth, requireGamePerm("files"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ path: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await games.copyFile(pid(c), parsed.data.path);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/files/upload", requireAuth, requireGamePerm("files"), async (c) => {
+    const path = c.req.query("path") || "";
+    if (!path) throw errors.validation({ path: "path is required" });
+    const result = await games.uploadFile(pid(c), path, c.req.raw.body);
+    return c.json({ success: true, ...result });
+  });
+
+  app.get("/api/v1/game-servers/:id/files/archive", requireAuth, requireGamePerm(), async (c) => {
+    const path = c.req.query("path") || "";
+    if (!path) throw errors.validation({ path: "path is required" });
+    // Tar the path on the agent host, then stream it down in base64 chunks.
+    const archived = await games.archiveDir(pid(c), path);
+    const row = await ctx.db.get<{ server_id: string; name: string }>(`SELECT server_id, name FROM game_servers WHERE id = ?`, [pid(c)]);
+    if (!row) throw errors.notFound("Game server not found");
+    const hub = ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const CHUNK = 256 * 1024;
+    let offset = 0;
+    let total: number | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const res = await hub.request(row.server_id, "file.read", {
+            path: archived.path,
+            offset,
+            length: CHUNK,
+          } as never, { timeoutMs: 60_000 }) as { data: string; length: number; total: number };
+          if (total === null) total = res.total;
+          if (res.length === 0 || offset >= total) {
+            controller.close();
+            // Clean up the temp archive on the agent host.
+            await hub.request(row.server_id, "file.remove", { path: archived.path }).catch(() => {});
+            return;
+          }
+          controller.enqueue(Buffer.from(res.data, "base64"));
+          offset += res.length;
+          if (offset >= total) {
+            controller.close();
+            await hub.request(row.server_id, "file.remove", { path: archived.path }).catch(() => {});
+          }
+        } catch (err) {
+          controller.error(err instanceof Error ? err : new Error(String(err)));
+        }
+      },
+    });
+    const fileName = `${row.name.replace(/[^a-zA-Z0-9-_]/g, "_")}-${path.split("/").filter(Boolean).pop() ?? "files"}.tar.gz`;
+    return new Response(stream as unknown as ReadableStream, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${fileName.replace(/"/g, "")}"`,
+        "Cache-Control": "no-store",
+      },
+    });
   });
 
   /* ── game server: schedules ─────────────────────────────────── */
@@ -292,6 +369,19 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
 
   app.get("/api/v1/game-servers/:id/allocations", requireAuth, requireGamePerm(), async (c) => {
     const items = await games.listAllocations(pid(c));
+    return c.json({ success: true, items });
+  });
+
+  app.post("/api/v1/game-servers/:id/allocations", requireAuth, requireGamePerm("network"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ ip: z.string().min(1), port: z.number().int().min(1).max(65535), notes: z.string().optional() }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const items = await games.createAllocation(pid(c), parsed.data);
+    return c.json({ success: true, items });
+  });
+
+  app.delete("/api/v1/game-allocations/:allocationId", requireAuth, requireGamePerm("network", gameIdFromAllocation), async (c) => {
+    const items = await games.removeAllocation(pid(c, "allocationId"));
     return c.json({ success: true, items });
   });
 
@@ -506,10 +596,10 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
   app.get("/api/v1/resources/:type/:id/logs", requireAuth, async (c) => {
     const type = c.req.param("type");
     const id = c.req.param("id");
-    if (!type || !id || !["database", "application", "backup"].includes(type)) {
+    if (!type || !id || !["database", "application", "backup", "game"].includes(type)) {
       return c.json({ error: { code: "VALIDATION", message: "Unsupported resource type" } }, 422);
     }
-    const items = await listResourceLogs(ctx.db, type as "database" | "application" | "backup", id);
+    const items = await listResourceLogs(ctx.db, type as "database" | "application" | "backup" | "game", id);
     return c.json({ success: true, items });
   });
 

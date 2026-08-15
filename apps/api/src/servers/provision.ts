@@ -246,8 +246,10 @@ async function installDocker(
 }
 
 let cachedBundle: Buffer | null = null;
+let cachedSha256: string | null = null;
 
-async function loadAgentBundle(): Promise<Buffer | null> {
+/** Load (or build on demand) the single-file agent bundle shipped to servers. */
+export async function loadAgentBundle(): Promise<Buffer | null> {
   if (cachedBundle) return cachedBundle;
   const rel = `${import.meta.dir}/../../../../apps/agent/dist/agent.js`;
   if (existsSync(rel)) {
@@ -272,4 +274,14 @@ async function loadAgentBundle(): Promise<Buffer | null> {
     log.error("agent bundle build error", { error: err instanceof Error ? err.message : String(err) });
     return null;
   }
+}
+
+/** SHA-256 of the current agent bundle — the agent compares this for self-updates. */
+export async function agentBundleSha256(): Promise<string | null> {
+  if (cachedSha256) return cachedSha256;
+  const bundle = await loadAgentBundle();
+  if (!bundle) return null;
+  const { createHash } = await import("node:crypto");
+  cachedSha256 = createHash("sha256").update(bundle).digest("hex");
+  return cachedSha256;
 }

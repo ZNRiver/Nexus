@@ -6,6 +6,7 @@ import type { AppContext } from "../context";
 import { JobQueue } from "../jobs/queue";
 import { eventHub } from "../lib/events";
 import { nextRun, parseCron } from "../lib/cron";
+import { appendResourceLog } from "./resource-logs.service";
 import { newToken } from "../lib/crypto";
 
 /**
@@ -34,6 +35,31 @@ function parseEnv(raw: string | null | undefined): Record<string, string> {
 function ensureRcon(env: Record<string, string>): Record<string, string> {
   if (env.ENABLE_RCON === "TRUE" && env.RCON_PASSWORD) return env;
   return { ...rconDefaults(), ...env };
+}
+
+/**
+ * Decide how a console command should be executed on a game server container.
+ *
+ * - Commands with shell metacharacters (`&&`, `|`, `;`, `$`, `>`, `<`, backtick)
+ *   or that start with a known system binary are treated as system commands and
+ *   run through the real container shell (`/bin/sh -c`).
+ * - Everything else is a game command → sent via `rcon-cli` when RCON is
+ *   configured, so the command actually reaches the Minecraft server.
+ *
+ * Pure function — exported for unit tests.
+ */
+export function routeGameExec(
+  cmd: string[],
+  env: Record<string, string>,
+): { execCmd: string[]; shell: boolean } {
+  const rconPw = env.RCON_PASSWORD;
+  const line = cmd.join(" ");
+  const looksLikeShell =
+    /[&|;<>$`]/.test(line) || /^(cd|ls|cat|pwd|echo|find|grep|tail|head|rm|cp|mv|mkdir|touch|ps|top|free|df|du|env|which|whoami|id|uname|docker)\b/.test(line.trim());
+  const execCmd = rconPw && !looksLikeShell
+    ? ["rcon-cli", "--host", "127.0.0.1", "--port", env.RCON_PORT ?? "25575", "--password", rconPw, ...cmd]
+    : cmd;
+  return { execCmd, shell: looksLikeShell };
 }
 
 const GAME_IMAGES: Record<string, { default: string; versions: string[] }> = {
@@ -263,21 +289,12 @@ export class GameServersService {
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
     if (!row.container_id) throw errors.conflict("Game server container is not running");
     const env = parseEnv(row.environment);
-    const rconPw = env.RCON_PASSWORD;
-    // Commands with shell metacharacters (&&, |, ;, $, >, <, `) or that start
-    // with a filesystem path are system commands → run them through the real
-    // shell. Everything else is a game command → RCON.
-    const line = cmd.join(" ");
-    const looksLikeShell =
-      /[&|;<>$`]/.test(line) || /^(cd|ls|cat|pwd|echo|find|grep|tail|head|rm|cp|mv|mkdir|touch|ps|top|free|df|du|env|which|whoami|id|uname|docker)\b/.test(line.trim());
-    const execCmd = rconPw && !looksLikeShell
-      ? ["rcon-cli", "--host", "127.0.0.1", "--port", env.RCON_PORT ?? "25575", "--password", rconPw, ...cmd]
-      : cmd;
+    const { execCmd, shell } = routeGameExec(cmd, env);
     const result = await hub.request(row.server_id, "container.exec", {
       id: row.container_id,
       cmd: execCmd,
       timeoutMs: 30000,
-      shell: looksLikeShell,
+      shell,
     }) as { output: string; exitCode: number };
     await this.ctx.audit({ action: "game.exec", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { cmd } });
     return result;
@@ -307,6 +324,76 @@ export class GameServersService {
       networkRxBytes: number;
       networkTxBytes: number;
     };
+  }
+
+  /** Rename the game server (Pterodactyl-style settings). */
+  async update(id: string, input: { name?: string }): Promise<GameServer> {
+    const row = await this.get(id);
+    const name = input.name?.trim();
+    if (name !== undefined) {
+      if (name.length < 2) throw errors.validation({ name: "Name must be at least 2 characters" });
+      await this.db.run(`UPDATE game_servers SET name = ?, updated_at = ? WHERE id = ?`, [name, new Date().toISOString(), id]);
+      await this.ctx.audit({ action: "game.update", resourceType: "game-server", resourceId: id, resourceName: name, serverId: row.server_id, metadata: { field: "name" } });
+    }
+    return this.getPublic(id);
+  }
+
+  /**
+   * Reinstall — removes the container and re-creates it from the saved
+   * settings (same volume, same port). For itzg images this re-runs the
+   * entrypoint install (jar download), like Pterodactyl's reinstall.
+   *
+   * Runs as an async job (`game-server-reinstall`) so the panel can stream
+   * progress via resource logs while the container is being re-created.
+   */
+  async reinstall(id: string): Promise<{ jobId: string }> {
+    const row = await this.get(id);
+    const queue = new JobQueue(this.db);
+    const jobId = await queue.enqueue("game-server-reinstall", { gameServerId: id });
+    await this.db.run(`UPDATE game_servers SET status = 'STARTING', updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
+    appendResourceLog(this.db, "game", id, `Starting reinstall of ${row.name}…`, "system");
+    await this.ctx.audit({ action: "game.reinstall", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { jobId } });
+    return { jobId };
+  }
+
+  /** Job handler for game-server-reinstall — the actual container swap. */
+  async runReinstall(job: JobRow): Promise<void> {
+    const payload = job.payload as unknown as { gameServerId: string };
+    const row = await this.get(payload.gameServerId);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw Object.assign(new Error("Server offline — reinstall will retry"), { retryable: true });
+    const id = row.id;
+    const log = (msg: string, stream: "stdout" | "stderr" | "system" = "stdout") =>
+      void appendResourceLog(this.db, "game", id, msg, stream);
+
+    const containerName = `nexus-game-${row.id.replace("gme_", "")}`;
+    if (row.container_id) {
+      log("Removing the old container (volume preserved)…");
+      await hub.request(row.server_id, "container.remove", { id: row.container_id, force: true, volumes: false }).catch(() => {});
+    }
+    try {
+      log(`Creating container ${containerName} (${row.image})…`);
+      // game.create streams image pull + boot progress as resource.log lines.
+      const result = await hub.request(row.server_id, "game.create", {
+        gameServerId: row.id,
+        image: row.image,
+        containerName,
+        port: row.port,
+        memoryBytes: row.memory_bytes,
+        cpuLimit: row.cpu_limit,
+        env: ensureRcon(parseEnv(row.environment)),
+        volumeName: row.volume_name ?? containerName,
+        restartPolicy: "unless-stopped",
+        labels: {},
+      } as never, { timeoutMs: 10 * 60 * 1000 }) as { containerId: string };
+      await this.db.run(`UPDATE game_servers SET container_id = ?, status = 'RUNNING', updated_at = ? WHERE id = ?`, [result.containerId, new Date().toISOString(), id]);
+      log(`Reinstall complete — container ${result.containerId.slice(0, 12)} running.`, "system");
+    } catch (err) {
+      await this.db.run(`UPDATE game_servers SET status = 'FAILED', updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
+      log(`Reinstall failed: ${err instanceof Error ? err.message : String(err)}`, "stderr");
+      throw err;
+    }
+    eventHub.emit({ type: "game.status", gameServer: await this.getPublic(id) });
   }
 
   async remove(id: string, opts: { destroyData?: boolean } = {}): Promise<void> {
@@ -380,6 +467,80 @@ export class GameServersService {
     const result = await hub.request(row.server_id, "game.files.delete", { containerId, path, recursive } as never, { timeoutMs: 60_000 }) as { path: string };
     await this.ctx.audit({ action: "game.files.delete", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { path, recursive } });
     return result;
+  }
+
+  async copyFile(id: string, path: string): Promise<{ from: string; to: string }> {
+    const row = await this.get(id);
+    const { hub, containerId } = await this.withContainer(row);
+    const result = await hub.request(row.server_id, "game.files.copy", { containerId, path }) as { from: string; to: string };
+    await this.ctx.audit({ action: "game.file.copy", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { path, to: result.to } });
+    return result;
+  }
+
+  /** Tar a volume path into the agent backups dir (Pterodactyl-style directory download). */
+  async archiveDir(id: string, path: string): Promise<{ path: string; sizeBytes: number }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    if (!row.volume_name) throw errors.conflict("Game server has no volume to archive");
+    const fileName = `${row.id}_dir_${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz`;
+    const result = await hub.request(row.server_id, "game.files.archive", {
+      volumeName: row.volume_name,
+      path,
+      fileName,
+    } as never, { timeoutMs: 15 * 60 * 1000 }) as { path: string; sizeBytes: number };
+    await this.ctx.audit({ action: "game.file.archive", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { path } });
+    return result;
+  }
+
+  /**
+   * Stream an upload body into the game volume in base64 chunks. Returns the
+   * final byte count once the agent has copied the assembled file in place.
+   */
+  async uploadFile(id: string, path: string, body: ReadableStream<Uint8Array> | null): Promise<{ path: string; bytes: number }> {
+    const row = await this.get(id);
+    const { hub, containerId } = await this.withContainer(row);
+    if (!body) throw errors.badRequest("Empty upload body");
+    const reader = body.getReader();
+    const fileName = `upload_${row.id.replace("gme_", "")}_${new Date().toISOString().replace(/[:.]/g, "-")}.part`;
+    const CHUNK = 128 * 1024; // raw bytes per WS chunk (~171 KB base64)
+    let offset = 0;
+    let buffer = Buffer.alloc(0);
+    let total = 0;
+    const send = async (data: Buffer, at: number, final: boolean): Promise<number> => {
+      const res = await hub.request(row.server_id, "game.files.upload", {
+        containerId,
+        path,
+        fileName,
+        data: data.toString("base64"),
+        offset: at,
+        final,
+      } as never, { timeoutMs: 120_000 }) as { written: number; total: number };
+      return res.total;
+    };
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.length) {
+          buffer = Buffer.concat([buffer, Buffer.from(value)]);
+          while (buffer.length >= CHUNK) {
+            const piece = buffer.subarray(0, CHUNK);
+            buffer = buffer.subarray(CHUNK);
+            offset += piece.length;
+            total = await send(piece, offset - piece.length, false);
+          }
+        }
+      }
+      // Flush the tail (and the final chunk — copies the file into the volume).
+      total = await send(buffer, offset, true);
+      offset += buffer.length;
+    } finally {
+      reader.releaseLock();
+    }
+    if (total === 0) throw errors.badRequest("No data received");
+    await this.ctx.audit({ action: "game.file.upload", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { path, bytes: total } });
+    return { path, bytes: total };
   }
 
   async renameFile(id: string, path: string, newName: string): Promise<{ from: string; to: string }> {
@@ -681,6 +842,43 @@ export class GameServersService {
     return rows.map((r) => this.toAllocation(r));
   }
 
+  /** Create a new allocation (IP + port) for the game server. */
+  async createAllocation(gameServerId: string, input: { ip: string; port: number; notes?: string }): Promise<GameAllocation[]> {
+    const game = await this.get(gameServerId);
+    const ip = input.ip.trim();
+    const port = Math.floor(input.port);
+    if (!ip) throw errors.validation({ ip: "IP address is required" });
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw errors.validation({ port: "Port must be between 1 and 65535" });
+    const existing = await this.db.get<GameAllocationRow>(
+      `SELECT id FROM game_allocations WHERE game_server_id = ? AND ip = ? AND port = ?`,
+      [gameServerId, ip, port],
+    );
+    if (existing) throw errors.conflict(`Allocation ${ip}:${port} already exists`);
+
+    const now = new Date().toISOString();
+    const isFirst = !(await this.db.get(`SELECT id FROM game_allocations WHERE game_server_id = ? LIMIT 1`, [gameServerId]));
+    const id = newId("gma");
+    await this.db.run(
+      `INSERT INTO game_allocations (id, game_server_id, ip, port, notes, is_primary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, gameServerId, ip, port, input.notes?.trim() || null, isFirst ? 1 : 0, now, now],
+    );
+    await this.ctx.audit({ action: "game.allocation.create", resourceType: "game-server", resourceId: gameServerId, resourceName: game.name, serverId: game.server_id, metadata: { allocationId: id, ip, port, isFirst } });
+    return this.listAllocations(gameServerId);
+  }
+
+  /** Remove an allocation — refuse if it is the only one or the primary. */
+  async removeAllocation(allocationId: string): Promise<GameAllocation[]> {
+    const row = await this.db.get<GameAllocationRow>(`SELECT * FROM game_allocations WHERE id = ?`, [allocationId]);
+    if (!row) throw errors.notFound("Allocation not found");
+    const total = await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM game_allocations WHERE game_server_id = ?`, [row.game_server_id]);
+    if ((total?.n ?? 0) <= 1) throw errors.conflict("Cannot remove the last allocation — a game server needs at least one");
+    if (row.is_primary) throw errors.conflict("The primary allocation is the one the container binds — set another allocation as primary first");
+    await this.db.run(`DELETE FROM game_allocations WHERE id = ?`, [allocationId]);
+    const game = await this.get(row.game_server_id);
+    await this.ctx.audit({ action: "game.allocation.delete", resourceType: "game-server", resourceId: row.game_server_id, resourceName: game.name, serverId: game.server_id, metadata: { allocationId, ip: row.ip, port: row.port } });
+    return this.listAllocations(row.game_server_id);
+  }
+
   async updateAllocationNotes(allocationId: string, notes: string): Promise<GameAllocation> {
     const row = await this.db.get<GameAllocationRow>(`SELECT * FROM game_allocations WHERE id = ?`, [allocationId]);
     if (!row) throw errors.notFound("Allocation not found");
@@ -694,9 +892,43 @@ export class GameServersService {
     const game = await this.get(gameServerId);
     const row = await this.db.get<GameAllocationRow>(`SELECT * FROM game_allocations WHERE id = ? AND game_server_id = ?`, [allocationId, gameServerId]);
     if (!row) throw errors.notFound("Allocation not found");
+    const oldPort = game.port;
+    const newPort = row.port;
     await this.db.run(`UPDATE game_allocations SET is_primary = 0, updated_at = ? WHERE game_server_id = ?`, [new Date().toISOString(), gameServerId]);
     await this.db.run(`UPDATE game_allocations SET is_primary = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), allocationId]);
-    await this.ctx.audit({ action: "game.allocation.primary", resourceType: "game-server", resourceId: gameServerId, resourceName: game.name, serverId: game.server_id, metadata: { allocationId } });
+
+    // A primary allocation is what the container actually binds — if the port
+    // changed, update the server record and recreate the container so the
+    // published port really moves (Pterodactyl behaviour).
+    let recreated = false;
+    if (newPort !== oldPort) {
+      await this.db.run(`UPDATE game_servers SET port = ?, updated_at = ? WHERE id = ?`, [newPort, new Date().toISOString(), gameServerId]);
+      const hub = this.ctx.hub;
+      if (hub.isOnline(game.server_id) && game.container_id) {
+        try {
+          const containerName = `nexus-game-${game.id.replace("gme_", "")}`;
+          await hub.request(game.server_id, "container.remove", { id: game.container_id, force: true, volumes: false }).catch(() => {});
+          const result = await hub.request(game.server_id, "game.create", {
+            gameServerId: game.id,
+            image: game.image,
+            containerName,
+            port: newPort,
+            memoryBytes: game.memory_bytes,
+            cpuLimit: game.cpu_limit,
+            env: ensureRcon(parseEnv(game.environment)),
+            volumeName: game.volume_name ?? containerName,
+            restartPolicy: "unless-stopped",
+            labels: {},
+          } as never, { timeoutMs: 10 * 60 * 1000 }) as { containerId: string };
+          await this.db.run(`UPDATE game_servers SET container_id = ?, status = 'RUNNING', updated_at = ? WHERE id = ?`, [result.containerId, new Date().toISOString(), gameServerId]);
+          recreated = true;
+        } catch {
+          recreated = false;
+        }
+      }
+    }
+
+    await this.ctx.audit({ action: "game.allocation.primary", resourceType: "game-server", resourceId: gameServerId, resourceName: game.name, serverId: game.server_id, metadata: { allocationId, oldPort, newPort, recreated } });
     return this.listAllocations(gameServerId);
   }
 

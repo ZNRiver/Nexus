@@ -21,7 +21,12 @@ export function registerServerRoutes(app: App, ctx: AppContext): void {
   const servers = new ServersService(ctx.db, ctx);
 
   app.get("/api/v1/servers", requireAuth, requirePermission("server.read"), async (c) => {
-    return c.json({ success: true, items: await servers.list() });
+    const items = await servers.list();
+    // Attach each agent's self-update status (from its last heartbeat).
+    return c.json({
+      success: true,
+      items: items.map((s) => ({ ...s, update: ctx.hub.getUpdateStatus(s.id) })),
+    });
   });
 
   app.post("/api/v1/servers", requireAuth, requirePermission("server.write"), async (c) => {

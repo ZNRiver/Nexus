@@ -1,5 +1,5 @@
 import { createLogger } from "@nexus/logger";
-import type { AgentAction, AgentToApiMessage, DeploymentLogEntry } from "@nexus/types";
+import type { AgentAction, AgentToApiMessage, DeploymentLogEntry, ManagedContainerState } from "@nexus/types";
 import type { DbConnection, ServerRow } from "@nexus/database";
 import { errors } from "../lib/errors";
 import { eventHub } from "../lib/events";
@@ -21,8 +21,17 @@ interface AgentConnection {
   pending: Map<string, PendingRequest>;
 }
 
+export interface AgentUpdateStatus {
+  enabled: boolean;
+  lastCheckedAt: string | null;
+  lastUpgradedAt: string | null;
+  lastError: string | null;
+  runningSha256: string | null;
+}
+
 export class AgentHub {
   private connections = new Map<string, AgentConnection>();
+  private updateStatus = new Map<string, AgentUpdateStatus>();
 
   constructor(private readonly db: DbConnection) {}
 
@@ -32,6 +41,11 @@ export class AgentHub {
 
   listOnline(): string[] {
     return [...this.connections.keys()];
+  }
+
+  /** Self-update status reported by an agent's heartbeat (if enabled). */
+  getUpdateStatus(serverId: string): AgentUpdateStatus | null {
+    return this.updateStatus.get(serverId) ?? null;
   }
 
   async register(serverId: string, agentId: string, version: string, ws: WebSocket): Promise<void> {
@@ -178,6 +192,8 @@ export class AgentHub {
       }
       case "heartbeat": {
         await this.handleHeartbeat(serverId, msg.metrics);
+        const update = (msg as { update?: AgentUpdateStatus }).update;
+        if (update) this.updateStatus.set(serverId, update);
         return;
       }
       case "hello": {
@@ -201,6 +217,14 @@ export class AgentHub {
       `UPDATE servers SET status = 'ONLINE', last_heartbeat_at = ?, last_error = NULL, updated_at = ? WHERE id = ?`,
       [now, now, serverId],
     );
+    // Reconcile resource status against the agent's real container states so
+    // the panel never reports RUNNING for a container that is actually dead
+    // (crash, OOM, external `docker stop`, host reboot, …).
+    if (Array.isArray(metrics.managedContainers) && metrics.managedContainers.length > 0) {
+      await this.reconcileResourceStatus(serverId, metrics.managedContainers, now).catch((err) => {
+        log.warn("status reconcile failed", { serverId, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
     // Persist metric sample (single row per heartbeat; pruned by retention).
     await this.db.run(
       `INSERT INTO monitoring_metrics (id, server_id, ts, cpu_percent, memory_percent, disk_percent, containers_running, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -216,6 +240,110 @@ export class AgentHub {
       ],
     );
     eventHub.emit({ type: "server.metrics", serverId, metrics });
+  }
+
+  /**
+   * Syncs the DB status of applications/databases/game servers on this host
+   * with the actual docker container states reported by the agent. Only rows
+   * that already have a container are considered (CREATING/STARTING/DEPLOYING
+   * are left untouched — they are transient and will resolve via events).
+   */
+  private async reconcileResourceStatus(
+    serverId: string,
+    containers: ManagedContainerState[],
+    now: string,
+  ): Promise<void> {
+    const byType = new Map<string, Map<string, ManagedContainerState>>();
+    for (const c of containers) {
+      if (!c.type || !c.resourceId) continue;
+      if (!byType.has(c.type)) byType.set(c.type, new Map());
+      byType.get(c.type)!.set(c.resourceId, c);
+    }
+    const running = (c?: ManagedContainerState) => c?.state === "running";
+
+    // Applications — `current_container_id` must match the container id.
+    const apps = await this.db.all<{ id: string; status: string; current_container_id: string | null }>(
+      `SELECT id, status, current_container_id FROM applications WHERE server_id = ?`,
+      [serverId],
+    );
+    for (const app of apps) {
+      if (!app.current_container_id) continue;
+      const real = byType.get("application")?.get(app.id);
+      if (app.status === "DEPLOYING" || app.status === "NOT_DEPLOYED") continue;
+      const isRunning = running(real) && real?.id === app.current_container_id;
+      if (isRunning && app.status !== "RUNNING") {
+        await this.db.run(`UPDATE applications SET status = 'RUNNING', updated_at = ? WHERE id = ?`, [now, app.id]);
+        this.emitResourceEvent("application", app.id, "RUNNING");
+      } else if (!isRunning && app.status === "RUNNING") {
+        await this.db.run(`UPDATE applications SET status = 'STOPPED', updated_at = ? WHERE id = ?`, [now, app.id]);
+        this.emitResourceEvent("application", app.id, "STOPPED");
+      }
+    }
+
+    // Databases.
+    const dbs = await this.db.all<{ id: string; status: string; container_id: string | null }>(
+      `SELECT id, status, container_id FROM databases WHERE server_id = ?`,
+      [serverId],
+    );
+    for (const dbRow of dbs) {
+      if (!dbRow.container_id) continue;
+      const real = byType.get("database")?.get(dbRow.id);
+      if (dbRow.status === "CREATING" || dbRow.status === "REMOVING") continue;
+      const isRunning = running(real) && real?.id === dbRow.container_id;
+      if (isRunning && dbRow.status !== "RUNNING") {
+        await this.db.run(`UPDATE databases SET status = 'RUNNING', updated_at = ? WHERE id = ?`, [now, dbRow.id]);
+        this.emitResourceEvent("database", dbRow.id, "RUNNING");
+      } else if (!isRunning && dbRow.status === "RUNNING") {
+        await this.db.run(`UPDATE databases SET status = 'STOPPED', updated_at = ? WHERE id = ?`, [now, dbRow.id]);
+        this.emitResourceEvent("database", dbRow.id, "STOPPED");
+      }
+    }
+
+    // Game servers.
+    const games = await this.db.all<{ id: string; status: string; container_id: string | null }>(
+      `SELECT id, status, container_id FROM game_servers WHERE server_id = ?`,
+      [serverId],
+    );
+    for (const g of games) {
+      if (!g.container_id) continue;
+      const real = byType.get("game")?.get(g.id);
+      if (g.status === "CREATING" || g.status === "STARTING" || g.status === "REMOVING") continue;
+      const isRunning = running(real) && real?.id === g.container_id;
+      if (isRunning && g.status !== "RUNNING") {
+        await this.db.run(`UPDATE game_servers SET status = 'RUNNING', updated_at = ? WHERE id = ?`, [now, g.id]);
+        this.emitResourceEvent("game", g.id, "RUNNING");
+      } else if (!isRunning && g.status === "RUNNING") {
+        await this.db.run(`UPDATE game_servers SET status = 'STOPPED', updated_at = ? WHERE id = ?`, [now, g.id]);
+        this.emitResourceEvent("game", g.id, "STOPPED");
+      }
+    }
+  }
+
+  /** Emits the status change to dashboard sockets using the existing event shapes. */
+  private emitResourceEvent(
+    type: "application" | "database" | "game",
+    id: string,
+    status: string,
+  ): void {
+    if (type === "database") {
+      void this.db
+        .get<Record<string, unknown>>(`SELECT * FROM databases WHERE id = ?`, [id])
+        .then((row) => {
+          if (row) eventHub.emit({ type: "database.status", database: row as never });
+        })
+        .catch(() => {});
+      return;
+    }
+    if (type === "game") {
+      void this.db
+        .get<Record<string, unknown>>(`SELECT * FROM game_servers WHERE id = ?`, [id])
+        .then((row) => {
+          if (row) eventHub.emit({ type: "game.status", gameServer: row as never });
+        })
+        .catch(() => {});
+      return;
+    }
+    // Applications have no dedicated status event; the dashboard polls instead.
   }
 
   private async handleAgentEvent(serverId: string, event: { type: string; resourceId?: string; data: Record<string, unknown>; timestamp: string }): Promise<void> {
@@ -265,7 +393,7 @@ export class AgentHub {
       case "resource.log": {
         const resourceIdValue = String(resourceId ?? "");
         const message = String(data.message ?? "");
-        const resourceType = (String(data.resourceType ?? "") as "database" | "application" | "backup") || "database";
+        const resourceType = (String(data.resourceType ?? "") as "database" | "application" | "backup" | "game") || "database";
         if (!resourceIdValue || !message) return;
         const id = `rlog_${Math.random().toString(36).slice(2, 14)}`;
         await this.db.run(

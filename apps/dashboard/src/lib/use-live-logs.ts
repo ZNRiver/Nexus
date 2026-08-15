@@ -20,6 +20,22 @@ export interface UseLiveLogsResult {
   live: boolean;
   /** force a re-seed from REST (e.g. right after sending a command) */
   resync: () => Promise<void>;
+  /** inject synthetic lines (echoed command + RCON output) into the live buffer */
+  append: (lines: string[], kind?: "cmd" | "out" | "err") => void;
+  /** wipe the buffer (Pterodactyl-style: cleared when the server stops/restarts) */
+  clear: () => void;
+}
+
+// Control markers so parseLogs can style injected lines (command echo, RCON
+// output, errors) the same way it styles real container log lines.
+export const INJ_CMD = "\u0001";
+export const INJ_OUT = "\u0002";
+export const INJ_ERR = "\u0003";
+
+/** Wrap a line with a marker so the console can color it correctly. */
+export function markInjected(kind: "cmd" | "out" | "err", line: string): string {
+  const m = kind === "cmd" ? INJ_CMD : kind === "err" ? INJ_ERR : INJ_OUT;
+  return `${m}${line}`;
 }
 
 /**
@@ -43,6 +59,34 @@ export function useLiveLogs({ enabled, streamId, kind, id, seed }: UseLiveLogsOp
     } catch {
       /* keep current buffer on seed failure */
     }
+  }, []);
+
+  /**
+   * Inject synthetic lines straight into the live buffer (command echo, RCON
+   * response, exec errors) so they appear on the same timeline as the
+   * container logs. Dedups against the recent tail so lines the server already
+   * printed (e.g. RCON echoes the command) don't appear twice.
+   */
+  const append = useCallback((lines: string[], kind: "cmd" | "out" | "err" = "out") => {
+    if (!lines.length) return;
+    const recent = textRef.current.split("\n").slice(-30).map((l) => l.trim().toLowerCase());
+    const out: string[] = [];
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (recent.includes(line.toLowerCase())) continue; // already on screen
+      out.push(markInjected(kind, line));
+      recent.push(line.toLowerCase());
+    }
+    if (!out.length) return;
+    textRef.current = textRef.current ? `${textRef.current}\n${out.join("\n")}` : out.join("\n");
+    setText(textRef.current);
+  }, []);
+
+  /** Wipe the buffer entirely (e.g. the server was stopped or restarted). */
+  const clear = useCallback(() => {
+    textRef.current = "";
+    setText("");
   }, []);
 
   // Subscribe / unsubscribe the WS stream.
@@ -88,5 +132,5 @@ export function useLiveLogs({ enabled, streamId, kind, id, seed }: UseLiveLogsOp
     return () => clearInterval(t);
   }, [enabled, streamId, kind, id, live, resync]);
 
-  return { text, live, resync };
+  return { text, live, resync, append, clear };
 }

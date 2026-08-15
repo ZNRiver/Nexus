@@ -1,6 +1,7 @@
 import { createLogger } from "@nexus/logger";
-import type { AgentAction } from "@nexus/types";
+import type { AgentAction, ManagedContainerState } from "@nexus/types";
 import type { AgentConfig } from "../config";
+import type { SelfUpdater } from "../self-update";
 import { dispatch, validateRequest, type HandlerContext } from "../handlers";
 import { DockerService } from "../docker/service";
 
@@ -12,7 +13,10 @@ export class AgentClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
-  constructor(private readonly config: AgentConfig) {}
+  constructor(
+    private readonly config: AgentConfig,
+    private readonly updater?: SelfUpdater,
+  ) {}
 
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
@@ -95,11 +99,38 @@ export class AgentClient {
           };
         },
       });
+      // Real per-resource container states so the API can reconcile the DB
+      // status with docker reality (crash / external stop / OOM etc.).
+      const managed: ManagedContainerState[] = (await docker.ps())
+        .filter((c) => c.labels["nexus.managed"] === "true")
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          state: c.state,
+          type: c.labels["nexus.type"] ?? undefined,
+          resourceId:
+            c.labels["nexus.application"] ?? c.labels["nexus.database"] ?? c.labels["nexus.game"] ?? undefined,
+        }));
+      metrics.managedContainers = managed;
       // The connection may have closed while we awaited the metrics — re-check
       // before sending. Sending on a closed/null socket would crash the agent
       // and put systemd into a restart loop.
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      this.ws.send(JSON.stringify({ type: "heartbeat", serverId: this.config.serverId, metrics }));
+      const update = this.updater?.getStatus();
+      this.ws.send(JSON.stringify({
+        type: "heartbeat",
+        serverId: this.config.serverId,
+        metrics,
+        update: update
+          ? {
+              enabled: this.config.updateIntervalMs > 0,
+              lastCheckedAt: update.lastCheckedAt ?? null,
+              lastUpgradedAt: update.lastUpgradedAt ?? null,
+              lastError: update.lastError ?? null,
+              runningSha256: update.runningSha256 ?? null,
+            }
+          : undefined,
+      }));
     } catch (err) {
       log.warn("heartbeat failed", { error: err instanceof Error ? err.message : String(err) });
     }

@@ -7,9 +7,9 @@ import {
   Activity as ActivityIcon, Loader2, Trash2, Radio, Timer, Cpu, MemoryStick, HardDrive,
   ArrowDownToLine, ArrowUpFromLine, FolderPlus, FilePlus, Upload, FileText, MoreHorizontal,
   Download, Lock, Unlock, Pencil, Save, ChevronRight, Plus, X, RefreshCw, PlayCircle, Folder, File,
-  Star, TerminalSquare, Check,
+  Star, TerminalSquare, Check, Copy,
 } from "lucide-react";
-import { get, post, patch, put, del, downloadBackup } from "@/lib/api";
+import { get, post, patch, put, del, downloadBackup, downloadGameArchive } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, type TabDef } from "@/components/ui/Tabs";
@@ -17,6 +17,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Sparkline } from "@/components/sparkline";
 import { Skeleton } from "@/components/skeleton";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { OperationLogPanel } from "@/components/operation-log-panel";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/Switch";
@@ -24,7 +25,8 @@ import { useToast } from "@/components/toast";
 import { formatBytes, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useLiveLogs } from "@/lib/use-live-logs";
-import type { GameServer, Server, SystemMetrics } from "@nexus/types";
+import { subscribeDashboard } from "@/lib/ws";
+import type { GameServer, GameServerStatus, Server, SystemMetrics } from "@nexus/types";
 
 type TabKey = "console" | "files" | "schedules" | "users" | "backups" | "network" | "startup" | "settings" | "activity";
 
@@ -44,12 +46,20 @@ interface LogLine {
   ts: string;
   level: "INFO" | "WARN" | "ERROR" | "SYSTEM";
   text: string;
+  /** injected console lines (command echo / RCON output / errors) get styled separately */
+  kind?: "cmd" | "out" | "err";
 }
 
 /** Parse raw container log lines into { timestamp, level, text }. */
 function parseLogs(raw: string): LogLine[] {
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
   return lines.map((line) => {
+    // Lines injected by the console (command echo + RCON output) carry a
+    // control marker; strip it and remember the kind for styling.
+    if (line[0] === "\u0001" || line[0] === "\u0002" || line[0] === "\u0003") {
+      const kind = line[0] === "\u0001" ? "cmd" : line[0] === "\u0003" ? "err" : "out";
+      return { ts: "", level: "INFO", kind, text: line.slice(1) };
+    }
     const tsMatch = line.match(/^\[?(\d{1,2}:\d{2}(?::\d{2})?)\s*\]?/);
     const ts = tsMatch?.[1] ?? "";
     const upper = line.toUpperCase();
@@ -87,9 +97,6 @@ export function GameServerDetailPage() {
   const [tab, setTab] = useState<TabKey>("console");
   const [cmd, setCmd] = useState("");
   const [execBusy, setExecBusy] = useState(false);
-  // Lines echoed straight into the console (sent commands + exec output) so the
-  // terminal feels live without popping a toast for every command.
-  const [sent, setSent] = useState<{ ts: string; text: string; kind: "cmd" | "out" | "err" }[]>([]);
   const [actionBusy, setActionBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -112,6 +119,17 @@ export function GameServerDetailPage() {
   });
 
   const game = data?.gameServer;
+
+  // Reflect real container state pushed by the API (heartbeat reconcile).
+  useEffect(() => {
+    const unsub = subscribeDashboard((event) => {
+      if (event.type === "game.status" && event.gameServer.id === id) {
+        queryClient.invalidateQueries({ queryKey: ["game-server-detail", id] });
+        queryClient.invalidateQueries({ queryKey: ["game-servers"] });
+      }
+    });
+    return unsub;
+  }, [id, queryClient]);
   const server = data?.server;
   const system = data?.system;
 
@@ -142,7 +160,7 @@ export function GameServerDetailPage() {
 
   // Live console: seed from REST, then stream lines over the dashboard WS.
   // No 5s polling while the stream is alive.
-  const { text: liveText, live, resync: resyncLogs } = useLiveLogs({
+  const { text: liveText, live, resync: resyncLogs, append: appendLog, clear: clearLogs } = useLiveLogs({
     enabled: tab === "console" && !!game?.containerId,
     streamId: game?.containerId ? `game:${id}` : null,
     kind: "game",
@@ -155,13 +173,31 @@ export function GameServerDetailPage() {
 
   const logs = useMemo(() => parseLogs(liveText), [liveText]);
 
+  // Pterodactyl-style console: when the server stops or restarts (detected by a
+  // status change, including crashes), wipe the console instead of keeping the
+  // old boot's lines. Restarting/starting re-seeds with the fresh boot's logs.
+  const prevStatusRef = useRef<GameServerStatus | undefined>(game?.status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = game?.status;
+    if (!prev || !game?.status || prev === game.status) return;
+    if (prev === "RUNNING") {
+      // Stopped / crashed / restarting → clear the old boot's output.
+      clearLogs();
+    } else if (game.status === "RUNNING" && prev === "STOPPED") {
+      // Fresh start → clear stale output and seed with the new boot.
+      clearLogs();
+      setTimeout(() => void resyncLogs(), 1000);
+    }
+  }, [game?.status, clearLogs, resyncLogs]);
+
   // Always jump to the newest logs (bottom) when the Console tab opens, and
   // follow new lines as they arrive. Deps include `tab` so re-entering the tab
   // (cached logs, same length) still scrolls down instead of staying at the top.
   useEffect(() => {
     if (tab !== "console") return;
     if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
-  }, [tab, logs.length, sent.length]);
+  }, [tab, logs.length]);
 
   const runAction = async (action: "start" | "stop" | "restart") => {
     setActionBusy(true);
@@ -169,7 +205,14 @@ export function GameServerDetailPage() {
       await post(`/game-servers/${id}/${action}`);
       toast("success", `${action[0].toUpperCase()}${action.slice(1)} requested`, game?.name);
       queryClient.invalidateQueries({ queryKey: ["game-server-detail", id] });
-      setTimeout(() => void resyncLogs(), 800);
+      // Wipe the console immediately (Pterodactyl behaviour). On stop the
+      // console stays empty; on restart/start the live WS stream delivers the
+      // fresh boot's lines (docker logs keeps history, so a resync would just
+      // bring the old boot back).
+      clearLogs();
+      if (action === "start") {
+        setTimeout(() => void resyncLogs(), 1500);
+      }
     } catch (err) {
       toast("error", "Action failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -182,18 +225,19 @@ export function GameServerDetailPage() {
     if (parts.length === 0 || !game?.containerId) return;
     setExecBusy(true);
     const text = parts.join(" ");
-    setSent((s) => [...s, { ts: new Date().toLocaleTimeString("pt-BR", { hour12: false }), text: `> ${text}`, kind: "cmd" }]);
+    // Echo the command straight into the live log timeline (same stream as the
+    // container logs) — no separate buffer, no toast.
+    appendLog([`> ${text}`], "cmd");
     try {
       const res = await post<{ output: string; exitCode: number }>(`/game-servers/${id}/exec`, { cmd: parts });
       const out = res.output?.trim();
       if (out) {
-        for (const line of out.split("\n")) {
-          setSent((s) => [...s, { ts: "", text: line, kind: res.exitCode === 0 ? "out" : "err" }]);
-        }
+        appendLog(out.split("\n"), res.exitCode === 0 ? "out" : "err");
       }
-      setTimeout(() => void resyncLogs(), 600);
+      // No forced resync: RCON output is already in the buffer, and new
+      // container lines keep arriving over the WS stream.
     } catch (err) {
-      setSent((s) => [...s, { ts: "", text: `✗ ${err instanceof Error ? err.message : "Unknown error"}`, kind: "err" }]);
+      appendLog([`✗ ${err instanceof Error ? err.message : "Unknown error"}`], "err");
     } finally {
       setExecBusy(false);
       setCmd("");
@@ -301,16 +345,13 @@ export function GameServerDetailPage() {
                     )}
                     {logs.map((l, i) => (
                       <div key={i} className="flex gap-3 whitespace-pre-wrap break-all">
-                        <span className="shrink-0 select-none text-zinc-500">{l.ts || "••••••"}</span>
-                        <span className={levelClass[l.level]}>{l.text}</span>
-                      </div>
-                    ))}
-                    {sent.map((l, i) => (
-                      <div key={`s${i}`} className="flex gap-3 whitespace-pre-wrap break-all">
-                        <span className="shrink-0 select-none text-zinc-500">{l.ts || "      "}</span>
+                        <span className="shrink-0 select-none text-zinc-500">{l.ts || (l.kind ? "      " : "••••••")}</span>
                         <span
                           className={cn(
-                            l.kind === "cmd" ? "font-semibold text-cyan-300" : l.kind === "err" ? "text-red-400" : "text-zinc-300",
+                            l.kind === "cmd" && "font-semibold text-cyan-300",
+                            l.kind === "err" && "text-red-400",
+                            l.kind === "out" && "text-zinc-300",
+                            !l.kind && levelClass[l.level],
                           )}
                         >
                           {l.text}
@@ -538,6 +579,9 @@ function FilesTab({ game }: { game: GameServer }) {
   const [renameTarget, setRenameTarget] = useState<{ path: string; name: string } | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
+  const [copyBusy, setCopyBusy] = useState<string | null>(null);
+  const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
+  const [upload, setUpload] = useState<{ name: string; progress: number } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ path: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -651,37 +695,79 @@ function FilesTab({ game }: { game: GameServer }) {
     }
   };
 
-  const downloadFile = async (name: string) => {
+  const downloadEntry = async (e: GameFileEntry) => {
+    const full = joinPath(path, e.name);
+    setDownloadBusy(e.name);
     try {
-      const full = joinPath(path, name);
-      const res = await get<{ path: string; content: string; bytes: number }>(`/game-servers/${game.id}/files/content?path=${encodeURIComponent(full)}`);
-      const blob = new Blob([res.content], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = name;
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      toast("error", "Download failed", e instanceof Error ? e.message : "Unknown error");
+      if (e.type === "dir") {
+        // Stream the directory as a .tar.gz from the agent host.
+        await downloadGameArchive(game.id, full);
+      } else {
+        const res = await get<{ path: string; content: string; bytes: number }>(`/game-servers/${game.id}/files/content?path=${encodeURIComponent(full)}`);
+        const blob = new Blob([res.content], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = e.name;
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      toast("error", "Download failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setDownloadBusy(null);
+    }
+  };
+
+  const copyEntry = async (e: GameFileEntry) => {
+    const full = joinPath(path, e.name);
+    setCopyBusy(e.name);
+    try {
+      const res = await post<{ from: string; to: string }>(`/game-servers/${game.id}/files/copy`, { path: full });
+      toast("success", "Copied", res.to.split("/").pop() ?? "");
+      void load(path);
+    } catch (err) {
+      toast("error", "Copy failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setCopyBusy(null);
     }
   };
 
   const onUpload = async (file: File) => {
     if (!file) return;
-    if (file.size > 4 * 1024 * 1024) {
-      toast("error", "File too large", "Uploads through the panel are capped at 4 MB (text files).");
-      return;
-    }
+    const full = joinPath(path, file.name);
+    setUpload({ name: file.name, progress: 0 });
     try {
-      const content = await file.text();
-      const full = joinPath(path, file.name);
-      await post(`/game-servers/${game.id}/files/write`, { path: full, content });
-      toast("success", "Uploaded", file.name);
+      // Stream the file straight to the API (which chunks it to the agent) —
+      // no 4 MB text limit, binary-safe, real progress via XHR.
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/v1/game-servers/${game.id}/files/upload?path=${encodeURIComponent(full)}`);
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setUpload({ name: file.name, progress: Math.round((e.loaded / e.total) * 100) });
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else {
+            let msg = `Upload failed (${xhr.status})`;
+            try {
+              const body = JSON.parse(xhr.responseText);
+              msg = body?.error?.message ?? msg;
+            } catch { /* keep default */ }
+            reject(new Error(msg));
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network error during upload"));
+        xhr.send(file);
+      });
+      toast("success", "Uploaded", `${file.name} (${formatBytes(file.size)})`);
       void load(path);
     } catch (e) {
       toast("error", "Upload failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setUpload(null);
     }
   };
 
@@ -707,8 +793,8 @@ function FilesTab({ game }: { game: GameServer }) {
             <Button size="sm" variant="outline" onClick={() => { setMkModal("dir"); setMkName(""); }}>
               <FolderPlus className="size-3.5" /> Create Directory
             </Button>
-            <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
-              <Upload className="size-3.5" /> Upload
+            <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={!!upload}>
+              {upload ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />} {upload ? "Uploading…" : "Upload"}
             </Button>
             <Button size="sm" variant="outline" onClick={() => { setMkModal("file"); setMkName(""); }}>
               <FilePlus className="size-3.5" /> New File
@@ -729,6 +815,21 @@ function FilesTab({ game }: { game: GameServer }) {
           </div>
         </CardContent>
       </Card>
+
+      {upload && (
+        <div className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/40 px-3 py-2">
+          <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-[12.5px]">Uploading <span className="font-medium text-foreground">{upload.name}</span></span>
+              <span className="shrink-0 font-mono text-[12px] text-muted-foreground tabular-nums">{upload.progress}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary transition-[width] duration-200" style={{ width: `${Math.max(4, upload.progress)}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {sel.size > 0 && (
         <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/40 px-3 py-2">
@@ -830,12 +931,19 @@ function FilesTab({ game }: { game: GameServer }) {
                                   }}
                                 />
                                 <MenuItem
-                                  icon={<Download className="size-3.5" />}
-                                  label="Download"
-                                  disabled={e.type === "dir"}
+                                  icon={downloadBusy === e.name ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                                  label={e.type === "dir" ? "Download (.tar.gz)" : "Download"}
                                   onClick={() => {
                                     setMenuFor(null);
-                                    void downloadFile(e.name);
+                                    void downloadEntry(e);
+                                  }}
+                                />
+                                <MenuItem
+                                  icon={copyBusy === e.name ? <Loader2 className="size-3.5 animate-spin" /> : <Copy className="size-3.5" />}
+                                  label="Copy"
+                                  onClick={() => {
+                                    setMenuFor(null);
+                                    void copyEntry(e);
                                   }}
                                 />
                                 <MenuItem
@@ -1688,6 +1796,11 @@ function NetworkTab({ game }: { game: GameServer }) {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [savingNotes, setSavingNotes] = useState<string | null>(null);
   const [primaryBusy, setPrimaryBusy] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ ip: "", port: "", notes: "" });
+  const [adding, setAdding] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<GameAllocation | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     try {
@@ -1734,11 +1847,51 @@ function NetworkTab({ game }: { game: GameServer }) {
     }
   };
 
+  const add = async () => {
+    const port = parseInt(form.port, 10);
+    if (!form.ip.trim() || !Number.isInteger(port) || port < 1 || port > 65535) {
+      toast("error", "Invalid allocation", "Provide an IP address and a port between 1 and 65535.");
+      return;
+    }
+    setAdding(true);
+    try {
+      await post(`/game-servers/${id}/allocations`, { ip: form.ip.trim(), port, notes: form.notes.trim() || undefined });
+      toast("success", "Allocation added", `${form.ip.trim()}:${port}`);
+      setAddOpen(false);
+      setForm({ ip: "", port: "", notes: "" });
+      void load();
+    } catch (e) {
+      toast("error", "Add failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await del(`/game-allocations/${deleteTarget.id}`);
+      toast("success", "Allocation removed", `${deleteTarget.ip}:${deleteTarget.port}`);
+      setDeleteTarget(null);
+      void load();
+    } catch (e) {
+      toast("error", "Remove failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-sm font-semibold">Network</h2>
-        <p className="text-[13px] text-muted-foreground">Network allocations assigned to {game.name}.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Network</h2>
+          <p className="text-[13px] text-muted-foreground">Network allocations assigned to {game.name}. The primary one is what the container binds.</p>
+        </div>
+        <Button onClick={() => setAddOpen(true)}>
+          <Plus className="size-3.5" /> Add allocation
+        </Button>
       </div>
 
       {(items ?? []).map((a) => (
@@ -1776,6 +1929,14 @@ function NetworkTab({ game }: { game: GameServer }) {
                 </Button>
               </div>
             </div>
+            <button
+              onClick={() => setDeleteTarget(a)}
+              disabled={a.isPrimary}
+              title={a.isPrimary ? "Set another allocation as primary first" : "Remove allocation"}
+              className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              <Trash2 className="size-4" />
+            </button>
           </CardContent>
         </Card>
       ))}
@@ -1788,6 +1949,37 @@ function NetworkTab({ game }: { game: GameServer }) {
           </CardContent>
         </Card>
       )}
+
+      {/* Add allocation modal */}
+      <Modal isOpen={addOpen} onClose={() => !adding && setAddOpen(false)} maxWidth="440px" showCloseButton={!adding}>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold">Add allocation</h2>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">A new IP/port pair for {game.name}. The first allocation is made primary automatically.</p>
+          <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">IP Address</label>
+          <Input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })} placeholder="e.g. 192.168.1.10" className="mt-1.5 h-9 font-mono text-[12.5px]" />
+          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Port</label>
+          <Input value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value.replace(/\D/g, "") })} placeholder="e.g. 25570" className="mt-1.5 h-9 font-mono text-[12.5px]" inputMode="numeric" />
+          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Notes (optional)</label>
+          <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="e.g. backup port for staff" className="mt-1.5 h-9 text-[12.5px]" />
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setAddOpen(false)} disabled={adding}>Cancel</Button>
+            <Button onClick={() => void add()} disabled={adding || !form.ip.trim() || !form.port}>
+              {adding ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Add allocation
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => void confirmDelete()}
+        loading={deleting}
+        title="Remove allocation"
+        description="This allocation will no longer be associated with the server. The container keeps binding the primary one."
+        resourceName={deleteTarget ? `${deleteTarget.ip}:${deleteTarget.port}` : ""}
+        confirmLabel="Remove"
+      />
     </div>
   );
 }
@@ -1929,14 +2121,180 @@ function StartupTab({ game }: { game: GameServer }) {
    ───────────────────────────────────────────────────────────────── */
 
 function SettingsTab({ game }: { game: GameServer }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(game.name);
+  const [saving, setSaving] = useState(false);
+  const [reinstallOpen, setReinstallOpen] = useState(false);
+  const [reinstalling, setReinstalling] = useState(false);
+  const [reinstallActive, setReinstallActive] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [destroy, setDestroy] = useState(false);
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (trimmed.length < 2) {
+      toast("error", "Invalid name", "Name must be at least 2 characters.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await patch(`/game-servers/${game.id}`, { name: trimmed });
+      toast("success", "Server renamed", trimmed);
+      queryClient.invalidateQueries({ queryKey: ["game-server-detail", game.id] });
+      queryClient.invalidateQueries({ queryKey: ["game-servers"] });
+    } catch (err) {
+      toast("error", "Rename failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reinstall = async () => {
+    setReinstalling(true);
+    try {
+      await post(`/game-servers/${game.id}/reinstall`);
+      setReinstallOpen(false);
+      setReinstallActive(true);
+      queryClient.invalidateQueries({ queryKey: ["game-server-detail", game.id] });
+      // Poll until the server leaves the STARTING state, then hide the progress.
+      const t = window.setInterval(async () => {
+        try {
+          const r = await get<{ gameServer: GameServer }>(`/game-servers/${game.id}`);
+          if (r.gameServer.status === "RUNNING" || r.gameServer.status === "FAILED") {
+            window.clearInterval(t);
+            setReinstallActive(false);
+            queryClient.invalidateQueries({ queryKey: ["game-server-detail", game.id] });
+          }
+        } catch { /* retry */ }
+      }, 3000);
+    } catch (err) {
+      toast("error", "Reinstall failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setReinstalling(false);
+    }
+  };
+
+  const remove = async () => {
+    setDeleting(true);
+    try {
+      await del(`/game-servers/${game.id}${destroy ? "?destroy=true" : ""}`);
+      toast("success", "Game server deleted", game.name);
+      window.location.href = "/game-servers";
+    } catch (err) {
+      toast("error", "Delete failed", err instanceof Error ? err.message : "Unknown error");
+      setDeleting(false);
+    }
+  };
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <MetricCard icon={<Cpu className="size-3.5" />} label="CPU limit" value={game.cpuLimit ? `${game.cpuLimit} cores` : "Unlimited"} />
-      <MetricCard icon={<MemoryStick className="size-3.5" />} label="Memory" value={formatBytes(game.memoryBytes)} />
-      <MetricCard icon={<HardDrive className="size-3.5" />} label="Storage" value={formatBytes(game.storageBytes)} />
-      <MetricCard icon={<Radio className="size-3.5" />} label="Primary port" value={String(game.port)} mono />
-      <MetricCard icon={<FolderTree className="size-3.5" />} label="Volume" value={game.volumeName ?? "—"} mono />
-      <MetricCard icon={<TerminalSquare className="size-3.5" />} label="Image" value={game.image} mono />
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold">Settings</h2>
+        <p className="text-[13px] text-muted-foreground">General configuration and danger zone for {game.name}.</p>
+      </div>
+
+      {/* General */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-[13px] font-medium">General</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Server Name</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1.5 h-9 max-w-md" />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <MetricCard icon={<Cpu className="size-3.5" />} label="CPU limit" value={game.cpuLimit ? `${game.cpuLimit} cores` : "Unlimited"} />
+            <MetricCard icon={<MemoryStick className="size-3.5" />} label="Memory" value={formatBytes(game.memoryBytes)} />
+            <MetricCard icon={<HardDrive className="size-3.5" />} label="Storage" value={formatBytes(game.storageBytes)} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <MetricCard icon={<Radio className="size-3.5" />} label="Primary port" value={String(game.port)} mono />
+            <MetricCard icon={<FolderTree className="size-3.5" />} label="Volume" value={game.volumeName ?? "—"} mono />
+            <MetricCard icon={<TerminalSquare className="size-3.5" />} label="Image" value={game.image} mono />
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => void save()} disabled={saving || name.trim() === game.name}>
+              {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />} Save
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Maintenance */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-[13px] font-medium">Maintenance</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[13px] font-medium">Reinstall server</p>
+              <p className="mt-0.5 max-w-lg text-[12.5px] text-muted-foreground">
+                Removes the container and re-creates it from the saved settings. Your volume is kept — for Minecraft this re-downloads the server jar.
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => setReinstallOpen(true)} disabled={reinstallActive}>
+              {reinstallActive ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {reinstallActive ? "Reinstalling…" : "Reinstall"}
+            </Button>
+          </div>
+          {reinstallActive && (
+            <OperationLogPanel
+              resourceType="game"
+              resourceId={game.id}
+              title="Reinstall Logs"
+              subtitle="Removing the container, pulling the image and recreating it — live from the agent."
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Danger zone */}
+      <Card className="border-destructive/30">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-[13px] font-medium text-destructive">Danger Zone</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[13px] font-medium">Delete server</p>
+            <p className="mt-0.5 max-w-lg text-[12.5px] text-muted-foreground">
+              Removes the container and its records. Persistent data is kept unless you choose to destroy the volume.
+            </p>
+          </div>
+          <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+            <Trash2 className="size-3.5" /> Delete server
+          </Button>
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        open={reinstallOpen}
+        onClose={() => setReinstallOpen(false)}
+        onConfirm={() => void reinstall()}
+        loading={reinstalling}
+        title="Reinstall server"
+        description="The container will be removed and re-created with your saved settings. The volume is preserved."
+        resourceName={game.name}
+        confirmLabel="Reinstall"
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={() => void remove()}
+        loading={deleting}
+        title="Delete game server"
+        description="The container will be removed from the server. The persistent volume is kept unless you choose to destroy it."
+        resourceName={game.name}
+        confirmLabel="Delete server"
+        extra={
+          <label className="flex cursor-pointer items-center gap-2 text-[13px]">
+            <input type="checkbox" checked={destroy} onChange={(e) => setDestroy(e.target.checked)} className="accent-primary" />
+            Also destroy persistent data
+          </label>
+        }
+      />
     </div>
   );
 }

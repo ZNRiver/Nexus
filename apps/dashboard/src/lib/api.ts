@@ -46,9 +46,9 @@ export const patch = <T>(path: string, body?: unknown, query?: Query) => api<T>(
 export const put = <T>(path: string, body?: unknown, query?: Query) => api<T>(path, { method: "PUT", body: body === undefined ? undefined : JSON.stringify(body), query });
 export const del = <T>(path: string, query?: Query) => api<T>(path, { method: "DELETE", query });
 
-/** Download a backup file (streamed from the agent host) as a browser download. */
-export async function downloadBackup(backupId: string, fallbackName = "backup"): Promise<void> {
-  const res = await fetch(`/api/v1/backups/${backupId}/download`, { credentials: "include" });
+/** Trigger a browser download for a streaming GET endpoint (agent-hosted files). */
+async function downloadFromUrl(path: string, fallbackName = "download"): Promise<void> {
+  const res = await fetch(`/api/v1${path}`, { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as ApiErrorBody;
     throw new ApiError(res.status, body.error?.code ?? "UNKNOWN", body.error?.message ?? `Download failed (${res.status})`);
@@ -67,4 +67,14 @@ export async function downloadBackup(backupId: string, fallbackName = "backup"):
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Download a backup file (streamed from the agent host) as a browser download. */
+export function downloadBackup(backupId: string, fallbackName = "backup"): Promise<void> {
+  return downloadFromUrl(`/backups/${backupId}/download`, fallbackName);
+}
+
+/** Download a directory (or file) of a game server volume as a .tar.gz. */
+export function downloadGameArchive(gameId: string, path: string): Promise<void> {
+  return downloadFromUrl(`/game-servers/${gameId}/files/archive?path=${encodeURIComponent(path)}`);
 }

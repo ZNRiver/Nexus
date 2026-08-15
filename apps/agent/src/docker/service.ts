@@ -27,6 +27,20 @@ function dockerBin(): string {
   return process.platform === "win32" ? "docker" : "docker";
 }
 
+/**
+ * Build the argv for `docker exec`. Pure function — exported for unit tests.
+ *
+ * With `shell` the caller typed a real command line (`&&`, `|`, variables…),
+ * so it is passed to the container's `/bin/sh -c` verbatim. Without shell the
+ * command tokens are passed as exec-args (no shell interpretation, so shell
+ * metacharacters in user input can't be injected).
+ */
+export function buildExecArgs(base: string[], id: string, cmd: string[], shell: boolean): string[] {
+  return shell
+    ? [...base, "exec", "-i", id, "/bin/sh", "-c", cmd.join(" ")]
+    : [...base, "exec", "-i", id, ...cmd];
+}
+
 export class DockerService {
   constructor(private readonly dockerHost: string | null = null) {}
 
@@ -93,14 +107,27 @@ export class DockerService {
    * `onLine` (buffered across chunk boundaries) and calling `onEnd` when the
    * stream closes (container stopped, removed, or the process was killed).
    * Returns a handle whose `stop()` kills the follow process.
+   *
+   * When the container is running, the stream is anchored to the current boot
+   * (`--since StartedAt`) so a re-subscribe after a restart shows only the new
+   * boot's output — Pterodactyl-style — instead of the whole docker history.
    */
-  followLogs(
+  async followLogs(
     id: string,
     tail: number,
     onLine: (line: string) => void,
     onEnd: () => void,
-  ): { stop: () => void } {
-    const full = [...this.baseArgs(), "logs", "-f", "--tail", String(Math.max(0, tail)), id];
+  ): Promise<{ stop: () => void }> {
+    let since: string | null = null;
+    try {
+      const insp = await this.inspect(id) as { State?: { StartedAt?: string } };
+      if (insp?.State?.StartedAt) since = insp.State.StartedAt;
+    } catch {
+      /* keep --tail fallback */
+    }
+    const full = since
+      ? [...this.baseArgs(), "logs", "-f", "--since", since, id]
+      : [...this.baseArgs(), "logs", "-f", "--tail", String(Math.max(0, tail)), id];
     const child = spawn(dockerBin(), full, { windowsHide: true });
     let buffer = "";
     let finished = false;
@@ -189,6 +216,19 @@ export class DockerService {
     if (!id) return null;
     const names = (r.Names as string) ?? "";
     const name = names.replace(/^\//, "");
+    // `docker ps --format '{{json .}}'` returns Labels as a comma-separated
+    // string (`k=v,k2=v2`) while `docker inspect` returns an object — handle
+    // both so managed-container detection never misses.
+    const labels: Record<string, string> = {};
+    const labelsRaw = r.Labels;
+    if (typeof labelsRaw === "string" && labelsRaw.length > 0) {
+      for (const pair of labelsRaw.split(",")) {
+        const eq = pair.indexOf("=");
+        if (eq > 0) labels[pair.slice(0, eq)] = pair.slice(eq + 1);
+      }
+    } else if (labelsRaw && typeof labelsRaw === "object") {
+      for (const [k, v] of Object.entries(labelsRaw as Record<string, unknown>)) labels[k] = String(v);
+    }
     const ports: ContainerPort[] = [];
     const portStr = String(r.Ports ?? "");
     // "0.0.0.0:3000->3000/tcp, 443/tcp"
@@ -213,7 +253,7 @@ export class DockerService {
       ports,
       networks: [],
       volumes: [],
-      labels: {},
+      labels,
       restartCount: 0,
       exitCode: null,
     };
@@ -255,7 +295,17 @@ export class DockerService {
   }
 
   async logs(id: string, tail = 200): Promise<string> {
-    const res = await this.run(["logs", "--tail", String(tail), id], { timeoutMs: 20000 });
+    // Anchor to the current boot (Pterodactyl-style): show only the running
+    // container's output, not the whole docker history across restarts.
+    let since: string | null = null;
+    try {
+      const insp = await this.inspect(id) as { State?: { StartedAt?: string } };
+      if (insp?.State?.StartedAt) since = insp.State.StartedAt;
+    } catch {
+      /* fall back to --tail */
+    }
+    const args = since ? ["logs", "--since", since, id] : ["logs", "--tail", String(tail), id];
+    const res = await this.run(args, { timeoutMs: 20000 });
     return res.stdout + res.stderr;
   }
 
@@ -287,11 +337,7 @@ export class DockerService {
 
   async exec(id: string, cmd: string[], opts: { stdin?: string | Uint8Array; timeoutMs?: number; shell?: boolean } = {}): Promise<{ output: string; exitCode: number }> {
     return new Promise((resolve, reject) => {
-      // With `shell` the user typed a real command line (&&, |, variables…), so
-      // run it through the container's shell instead of exec-args.
-      const full = opts.shell
-        ? [...this.baseArgs(), "exec", "-i", id, "/bin/sh", "-c", cmd.join(" ")]
-        : [...this.baseArgs(), "exec", "-i", id, ...cmd];
+      const full = buildExecArgs(this.baseArgs(), id, cmd, opts.shell === true);
       const child = spawn(dockerBin(), full, { windowsHide: true });
       let stdout = "";
       let stderr = "";

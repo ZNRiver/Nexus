@@ -109,6 +109,57 @@ registerDatabaseRoutes(app, ctx);
 registerInfraRoutes(app, ctx);
 registerMiscRoutes(app, ctx);
 
+/* ── Agent self-update (authenticated by agent token, same as the WS) ── */
+app.get("/api/v1/agent/self-update", async (c) => {
+  const token = c.req.query("token") ?? "";
+  const serverId = c.req.query("serverId") ?? "";
+  if (!token || !serverId) return c.json({ error: { code: "VALIDATION", message: "token and serverId are required" } }, 422);
+  const agent = await db.get<{ token_hash: string; revoked_at: string | null }>(
+    `SELECT token_hash, revoked_at FROM server_agents WHERE server_id = ?`,
+    [serverId],
+  );
+  if (!agent || agent.revoked_at || agent.token_hash !== hashToken(token)) {
+    return c.json({ error: { code: "UNAUTHORIZED", message: "Invalid agent credentials" } }, 401);
+  }
+  const { agentBundleSha256, loadAgentBundle } = await import("./servers/provision");
+  const [sha256, bundle] = await Promise.all([agentBundleSha256(), loadAgentBundle()]);
+  if (!sha256 || !bundle) {
+    return c.json({ error: { code: "SERVER_ERROR", message: "Agent bundle not available on this host" } }, 500);
+  }
+  return c.json({
+    success: true,
+    serverId,
+    sha256,
+    size: bundle.length,
+  });
+});
+
+// Raw bundle download (used by the agent self-updater).
+app.get("/api/v1/agent/bundle", async (c) => {
+  const token = c.req.query("token") ?? "";
+  const serverId = c.req.query("serverId") ?? "";
+  if (!token || !serverId) return c.json({ error: { code: "VALIDATION", message: "token and serverId are required" } }, 422);
+  const agent = await db.get<{ token_hash: string; revoked_at: string | null }>(
+    `SELECT token_hash, revoked_at FROM server_agents WHERE server_id = ?`,
+    [serverId],
+  );
+  if (!agent || agent.revoked_at || agent.token_hash !== hashToken(token)) {
+    return c.json({ error: { code: "UNAUTHORIZED", message: "Invalid agent credentials" } }, 401);
+  }
+  const { loadAgentBundle } = await import("./servers/provision");
+  const bundle = await loadAgentBundle();
+  if (!bundle) {
+    return c.json({ error: { code: "SERVER_ERROR", message: "Agent bundle not available on this host" } }, 500);
+  }
+  return new Response(bundle as unknown as BodyInit, {
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(bundle.length),
+      "Cache-Control": "no-store",
+    },
+  });
+});
+
 app.notFound((c) => c.json({ error: { code: "NOT_FOUND", message: "Route not found" } }, 404));
 
 /* ── Worker ──────────────────────────────────────────────────────── */
@@ -129,6 +180,7 @@ worker.register("database-create", (job) => databasesService.runDatabaseCreate(j
 worker.register("database-backup", (job) => databasesService.runBackup(job));
 worker.register("application-backup", (job) => applicationsService.runBackup(job));
 worker.register("game-server-create", (job) => gamesService.runCreate(job));
+worker.register("game-server-reinstall", (job) => gamesService.runReinstall(job));
 worker.register("game-backup", (job) => gamesService.runBackup(job));
 worker.start();
 

@@ -23,6 +23,7 @@ import { formatBytes, formatTime, timeAgo } from "@/lib/format";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
 import { OperationLogPanel } from "@/components/operation-log-panel";
 import { useLiveLogs } from "@/lib/use-live-logs";
+import { subscribeDashboard } from "@/lib/ws";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/Switch";
@@ -79,6 +80,17 @@ export function DatabaseDetailPage() {
       ),
     refetchInterval: 8000,
   });
+
+  // Reflect real container state pushed by the API (heartbeat reconcile).
+  useEffect(() => {
+    const unsub = subscribeDashboard((event) => {
+      if (event.type === "database.status" && event.database.id === id) {
+        queryClient.invalidateQueries({ queryKey: ["database-detail", id] });
+        queryClient.invalidateQueries({ queryKey: ["databases"] });
+      }
+    });
+    return unsub;
+  }, [id, queryClient]);
 
   // Live container logs for the Logs tab (WS streaming, no 5s polling).
   const { text: dbLogsText, live: dbLogsLive, resync: resyncDbLogs } = useLiveLogs({
