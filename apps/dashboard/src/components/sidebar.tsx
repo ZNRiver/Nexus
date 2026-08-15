@@ -25,6 +25,7 @@ import {
   ScrollText,
   Bell,
   FolderKanban,
+  GitBranch,
 } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { useTheme } from "@/components/theme-provider";
@@ -58,6 +59,7 @@ const NAV = [
     section: "Platform",
     items: [
       { key: "domains", href: "/domains", icon: Globe, label: "Domains" },
+      { key: "git-providers", href: "/git-providers", icon: GitBranch, label: "Git Providers" },
       { key: "backups", href: "/backups", icon: Archive, label: "Backups" },
       { key: "jobs", href: "/jobs", icon: ScrollText, label: "Jobs" },
       { key: "audit", href: "/audit", icon: Bell, label: "Audit Log" },

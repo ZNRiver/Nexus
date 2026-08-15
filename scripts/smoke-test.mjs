@@ -121,6 +121,7 @@ const STATIC_ROUTES = [
   "/volumes",
   "/networks",
   "/domains",
+  "/git-providers",
   "/monitoring",
   "/game-servers",
   "/game-servers/new",

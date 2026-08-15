@@ -29,9 +29,15 @@ export function isCancelled(deploymentId: string): boolean {
   return cancelled.has(deploymentId);
 }
 
-function gitRun(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+function gitRun(args: string[], cwd: string, auth?: { token: string } | null): Promise<{ code: number; stdout: string; stderr: string }> {
+  // Authenticated clones use `-c http.extraHeader` so the token is never
+  // written into the repository's .git/config (unlike credentials baked into
+  // the remote URL). The header is per-invocation only.
+  const fullArgs = auth
+    ? ["-c", `http.extraHeader=Authorization: Basic ${Buffer.from(`oauth2:${auth.token}`).toString("base64")}`, ...args]
+    : args;
   return new Promise((resolve) => {
-    const child = spawn("git", args, { cwd, windowsHide: true });
+    const child = spawn("git", fullArgs, { cwd, windowsHide: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
@@ -45,28 +51,28 @@ export interface CloneResult {
   commit: string | null;
 }
 
-async function cloneRepository(repo: string, branch: string, dest: string, onLog: (msg: string) => void): Promise<CloneResult> {
+async function cloneRepository(repo: string, branch: string, dest: string, onLog: (msg: string) => void, auth?: { token: string } | null): Promise<CloneResult> {
   if (existsSync(dest)) {
     onLog("Repository directory exists — updating…");
-    const pull = await gitRun(["fetch", "--depth", "1", "origin", branch], dest);
+    const pull = await gitRun(["fetch", "--depth", "1", "origin", branch], dest, auth);
     if (pull.code !== 0) {
       onLog(`git fetch failed: ${pull.stderr.trim() || pull.stdout.trim()}`);
       // Fresh clone fallback
       rmSync(dest, { recursive: true, force: true });
     } else {
-      const checkout = await gitRun(["checkout", "-B", branch, `origin/${branch}`], dest);
+      const checkout = await gitRun(["checkout", "-B", branch, `origin/${branch}`], dest, auth);
       if (checkout.code !== 0) onLog(`git checkout warning: ${checkout.stderr.trim()}`);
     }
   }
   if (!existsSync(dest)) {
     onLog(`Cloning ${repo} (branch ${branch})…`);
-    const clone = await gitRun(["clone", "--depth", "1", "--branch", branch, repo, dest], process.cwd());
+    const clone = await gitRun(["clone", "--depth", "1", "--branch", branch, repo, dest], process.cwd(), auth);
     if (clone.code !== 0) {
       throw new Error(`git clone failed: ${clone.stderr.trim() || clone.stdout.trim()}`);
     }
     onLog("Repository cloned");
   }
-  const rev = await gitRun(["rev-parse", "--short", "HEAD"], dest);
+  const rev = await gitRun(["rev-parse", "--short", "HEAD"], dest, auth);
   return { workDir: dest, commit: rev.code === 0 ? rev.stdout.trim() || null : null };
 }
 
@@ -97,7 +103,7 @@ export async function executeDeployment(
       return { image: payload.prebuiltImage, containerId, commit: null };
     }
 
-    const clone = await cloneRepository(payload.repository, payload.branch, repoDir, onLog);
+    const clone = await cloneRepository(payload.repository, payload.branch, repoDir, onLog, payload.gitAuth ?? null);
     onLog(`Checked out ${clone.commit ?? payload.branch}`);
 
     if (payload.method === "DOCKERFILE") {

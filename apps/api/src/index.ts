@@ -101,6 +101,7 @@ const { registerApplicationRoutes } = await import("./controllers/applications.c
 const { registerDatabaseRoutes } = await import("./controllers/databases.controller");
 const { registerInfraRoutes } = await import("./controllers/infra.controller");
 const { registerMiscRoutes } = await import("./controllers/misc.controller");
+const { registerGitProviderRoutes } = await import("./controllers/git-providers.controller");
 
 registerAuthRoutes(app, ctx);
 registerServerRoutes(app, ctx);
@@ -108,6 +109,7 @@ registerApplicationRoutes(app, ctx);
 registerDatabaseRoutes(app, ctx);
 registerInfraRoutes(app, ctx);
 registerMiscRoutes(app, ctx);
+registerGitProviderRoutes(app, ctx);
 
 /* ── Agent self-update (authenticated by agent token, same as the WS) ── */
 app.get("/api/v1/agent/self-update", async (c) => {

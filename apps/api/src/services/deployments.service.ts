@@ -147,6 +147,15 @@ export class DeploymentsService {
       const rollbackTarget = dep.rollback_from ? await this.db.get<DeploymentRow>(`SELECT * FROM application_deployments WHERE id = ?`, [dep.rollback_from]) : null;
       const prebuiltImage = app.deployment_method === "DOCKERFILE" && rollbackTarget ? rollbackTarget.image ?? null : null;
 
+      // Authenticated git clone: when the app's provider has a connected
+      // account (personal access token stored in git_providers), ship the
+      // decrypted token to the agent so private repositories clone cleanly.
+      const { GitProvidersService } = await import("./git-providers.service");
+      const gitAuth =
+        app.provider && ["github", "gitlab", "bitbucket", "gitea"].includes(app.provider)
+          ? await new GitProvidersService(this.ctx).tokenFor(app.provider as never)
+          : null;
+
       const deploymentPayload = {
         deploymentId: dep.id,
         applicationId: app.id,
@@ -175,6 +184,7 @@ export class DeploymentsService {
         registryUsername: app.registry_username,
         registryPassword: app.registry_password_encrypted ? decrypt(app.registry_password_encrypted, this.ctx.config.encryptionKey) : undefined,
         prebuiltImage,
+        gitAuth: gitAuth ? { provider: app.provider as never, token: gitAuth } : null,
       };
 
       await log(`Deploying ${app.name} (${app.deployment_method}) to ${server?.name ?? dep.server_id}…`);

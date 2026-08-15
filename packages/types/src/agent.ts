@@ -196,6 +196,11 @@ export interface DeploymentExecutePayload {
   registryPassword?: string | null;
   /** when set, skip git clone/build and run this already-built image (rollback) */
   prebuiltImage?: string | null;
+  /** credentials for authenticated git clone of private repositories */
+  gitAuth?: {
+    provider: "github" | "gitlab" | "bitbucket" | "gitea" | string;
+    token: string;
+  } | null;
   cancelAt?: string | null;
 }
 

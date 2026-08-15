@@ -19,6 +19,7 @@ import { ImagesPage } from "@/pages/images";
 import { VolumesPage } from "@/pages/volumes";
 import { NetworksPage } from "@/pages/networks";
 import { DomainsPage } from "@/pages/domains";
+import { GitProvidersPage } from "@/pages/git-providers";
 import { MonitoringPage } from "@/pages/monitoring";
 import { GameServersPage } from "@/pages/game-servers";
 import { GameServerDetailPage } from "@/pages/game-server-detail";
@@ -69,6 +70,7 @@ export function App() {
           <Route path="/volumes" element={<VolumesPage />} />
           <Route path="/networks" element={<NetworksPage />} />
           <Route path="/domains" element={<DomainsPage />} />
+          <Route path="/git-providers" element={<GitProvidersPage />} />
           <Route path="/monitoring" element={<MonitoringPage />} />
           <Route path="/game-servers" element={<GameServersPage />} />
           <Route path="/game-servers/new" element={<GameServersPage mode="new" />} />
