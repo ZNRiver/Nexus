@@ -31,10 +31,11 @@ export function VolumesPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["volumes", effectiveServer],
-    queryFn: () => get<{ items: VolumeInfo[] }>("/volumes", { serverId: effectiveServer }),
+    queryFn: () => get<{ items: { serverId: string; volumes: VolumeInfo[] }[] }>("/volumes", { serverId: effectiveServer }),
     enabled: !!effectiveServer,
     refetchInterval: 15000,
   });
+  const volumes = (data?.items ?? []).flatMap((g) => g.volumes ?? []);
 
   const create = async () => {
     setCreating(true);
@@ -89,12 +90,12 @@ export function VolumesPage() {
 
       {isLoading ? (
         <TableSkeleton rows={6} cols={4} />
-      ) : !data?.items.length ? (
+      ) : !volumes.length ? (
         <EmptyState icon={<HardDrive className="size-5" />} title="No volumes" description="Create a volume or deploy an application with persistent storage." />
       ) : (
         <Card className="overflow-hidden">
           <div className="divide-y divide-border/50">
-            {data.items.map((v) => (
+            {volumes.map((v) => (
               <div key={v.name} className="flex items-center gap-4 px-5 py-3">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                   <HardDrive className="size-4" />

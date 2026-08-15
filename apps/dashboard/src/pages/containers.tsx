@@ -40,10 +40,11 @@ export function ContainersPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["containers", effectiveServer],
-    queryFn: () => get<{ items: ContainerInfo[] }>("/containers", { serverId: effectiveServer }),
+    queryFn: () => get<{ items: { serverId: string; containers: ContainerInfo[] }[] }>("/containers", { serverId: effectiveServer }),
     enabled: !!effectiveServer,
     refetchInterval: 8000,
   });
+  const containers = (data?.items ?? []).flatMap((g) => g.containers ?? []);
 
   const runAction = async () => {
     if (!actionTarget) return;
@@ -92,12 +93,12 @@ export function ContainersPage() {
 
       {isLoading ? (
         <TableSkeleton rows={8} cols={5} />
-      ) : !data?.items.length ? (
+      ) : !containers.length ? (
         <EmptyState icon={<Box className="size-5" />} title="No containers" description="Containers on this server will appear here — deploy an application or create a database." />
       ) : (
         <Card className="overflow-hidden">
           <div className="divide-y divide-border/50">
-            {data.items.map((c) => (
+            {containers.map((c) => (
               <div key={c.id} className="flex items-center gap-4 px-5 py-3">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                   <Box className="size-4" />

@@ -31,10 +31,11 @@ export function ImagesPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["images", effectiveServer],
-    queryFn: () => get<{ items: ImageInfo[] }>("/images", { serverId: effectiveServer }),
+    queryFn: () => get<{ items: { serverId: string; images: ImageInfo[] }[] }>("/images", { serverId: effectiveServer }),
     enabled: !!effectiveServer,
     refetchInterval: 15000,
   });
+  const images = (data?.items ?? []).flatMap((g) => g.images ?? []);
 
   const pull = async () => {
     setPulling(true);
@@ -89,13 +90,13 @@ export function ImagesPage() {
 
       {isLoading ? (
         <TableSkeleton rows={8} cols={4} />
-      ) : !data?.items.length ? (
+      ) : !images.length ? (
         <EmptyState icon={<ImageIcon className="size-5" />} title="No images" description="Pull an image or deploy an application — built images land here." />
       ) : (
         <Card className="overflow-hidden">
           <div className="divide-y divide-border/50">
-            {data.items.map((img) => (
-              <div key={img.id} className="flex items-center gap-4 px-5 py-3">
+            {images.map((img) => (
+              <div key={`${img.id}:${img.repository}:${img.tag}`} className="flex items-center gap-4 px-5 py-3">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                   <ImageIcon className="size-4" />
                 </div>

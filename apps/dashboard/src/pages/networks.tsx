@@ -31,10 +31,11 @@ export function NetworksPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["networks", effectiveServer],
-    queryFn: () => get<{ items: NetworkInfo[] }>("/networks", { serverId: effectiveServer }),
+    queryFn: () => get<{ items: { serverId: string; networks: NetworkInfo[] }[] }>("/networks", { serverId: effectiveServer }),
     enabled: !!effectiveServer,
     refetchInterval: 15000,
   });
+  const networks = (data?.items ?? []).flatMap((g) => g.networks ?? []);
 
   const create = async () => {
     setCreating(true);
@@ -90,12 +91,12 @@ export function NetworksPage() {
 
       {isLoading ? (
         <TableSkeleton rows={6} cols={4} />
-      ) : !data?.items.length ? (
+      ) : !networks.length ? (
         <EmptyState icon={<Network className="size-5" />} title="No networks" description="Create a network or deploy an application — isolated networks are created automatically." />
       ) : (
         <Card className="overflow-hidden">
           <div className="divide-y divide-border/50">
-            {data.items.map((n) => (
+            {networks.map((n) => (
               <div key={n.id} className="flex items-center gap-4 px-5 py-3">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                   <Network className="size-4" />

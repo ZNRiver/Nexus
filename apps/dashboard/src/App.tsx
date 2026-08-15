@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { AppLayout } from "@/layout";
 import { SetupPage } from "@/pages/setup";
 import { LoginPage } from "@/pages/login";
@@ -45,7 +46,8 @@ export function App() {
   }, []);
 
   return (
-    <BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
       <Routes>
         <Route path="/setup" element={<SetupPage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -79,6 +81,7 @@ export function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
