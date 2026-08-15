@@ -482,9 +482,15 @@ export interface Job {
 
 /* ── Notifications ───────────────────────────────────────────────── */
 export type NotificationType =
+  | "deployment.started"
   | "deployment.success"
   | "deployment.failed"
+  | "database.created"
+  | "application.created"
+  | "game.created"
+  | "database.backup.started"
   | "database.backup.completed"
+  | "backup.restored"
   | "server.offline"
   | "server.online"
   | "server.install-failed"

@@ -100,6 +100,33 @@ export function registerDatabaseRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...result });
   });
 
+  /* ── console (SQL / schema) ──────────────────────────────────── */
+
+  app.post("/api/v1/databases/:id/query", requireAuth, requirePermission("database.read"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const sql = typeof body.sql === "string" ? body.sql.trim() : "";
+    if (!sql) throw errors.validation({ sql: "sql is required" });
+    const result = await dbs.query(pid(c), sql);
+    return c.json({ success: true, ...result });
+  });
+
+  app.get("/api/v1/databases/:id/schema", requireAuth, requirePermission("database.read"), async (c) => {
+    const result = await dbs.schema(pid(c));
+    return c.json({ success: true, ...result });
+  });
+
+  app.get("/api/v1/databases/:id/objects", requireAuth, requirePermission("database.read"), async (c) => {
+    const result = await dbs.objects(pid(c));
+    return c.json({ success: true, ...result });
+  });
+
+  app.get("/api/v1/databases/:id/table-info", requireAuth, requirePermission("database.read"), async (c) => {
+    const table = (c.req.query("table") || "").trim();
+    if (!table) throw errors.validation({ table: "table is required" });
+    const result = await dbs.tableInfo(pid(c), table);
+    return c.json({ success: true, ...result });
+  });
+
   /* ── runtime info ───────────────────────────────────────────── */
 
   app.get("/api/v1/databases/:id/logs", requireAuth, requirePermission("database.read"), async (c) => {

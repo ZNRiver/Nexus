@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Bell, Search, ChevronRight, Server } from "lucide-react";
+import {
+  Bell, Search, ChevronRight, Server,
+  Rocket, Database, Gamepad2, Archive, RotateCcw, CloudOff, Cloud, Wrench, AlertTriangle, Info,
+} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { get, post } from "@/lib/api";
 import { subscribeDashboard } from "@/lib/ws";
@@ -63,7 +66,7 @@ export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
   const { data: notifs, refetch: refetchNotifs } = useQuery({
     queryKey: ["notifications"],
-    queryFn: () => get<{ items: { id: string; title: string; message: string; read: boolean; createdAt: string }[]; unread: number }>("/notifications"),
+    queryFn: () => get<{ items: { id: string; type: string; title: string; message: string; read: boolean; createdAt: string }[]; unread: number }>("/notifications"),
     refetchInterval: 30000,
   });
 
@@ -79,6 +82,23 @@ export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const markRead = async (id: string) => {
     await post(`/notifications/${id}/read`).catch(() => {});
     refetchNotifs();
+  };
+
+  const notifStyle = (type: string): { icon: React.ReactNode; color: string } => {
+    const cls = "size-4";
+    if (type.startsWith("deployment.started")) return { icon: <Rocket className={cls} />, color: "text-sky-400" };
+    if (type === "deployment.success") return { icon: <Rocket className={cls} />, color: "text-emerald-400" };
+    if (type === "deployment.failed") return { icon: <AlertTriangle className={cls} />, color: "text-red-400" };
+    if (type.startsWith("database.created")) return { icon: <Database className={cls} />, color: "text-indigo-400" };
+    if (type === "application.created") return { icon: <Rocket className={cls} />, color: "text-violet-400" };
+    if (type === "game.created") return { icon: <Gamepad2 className={cls} />, color: "text-fuchsia-400" };
+    if (type.startsWith("database.backup")) return { icon: <Archive className={cls} />, color: "text-amber-400" };
+    if (type === "backup.restored") return { icon: <RotateCcw className={cls} />, color: "text-emerald-400" };
+    if (type === "server.online") return { icon: <Cloud className={cls} />, color: "text-emerald-400" };
+    if (type === "server.offline") return { icon: <CloudOff className={cls} />, color: "text-red-400" };
+    if (type === "server.install-failed") return { icon: <Wrench className={cls} />, color: "text-red-400" };
+    if (type === "container.stopped") return { icon: <Server className={cls} />, color: "text-amber-400" };
+    return { icon: <Info className={cls} />, color: "text-muted-foreground" };
   };
 
   return (
@@ -140,20 +160,28 @@ export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
               </div>
               <div className="max-h-80 overflow-y-auto">
                 {notifs?.items.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">No notifications</p>}
-                {notifs?.items.slice(0, 20).map((n) => (
-                  <button
-                    key={n.id}
-                    onClick={() => markRead(n.id)}
-                    className={`flex w-full items-start gap-3 border-b border-border/40 px-4 py-3 text-start transition-colors hover:bg-foreground/[0.06] ${n.read ? "" : "bg-primary/[0.04]"}`}
-                  >
-                    <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                    <span className="min-w-0">
-                      <span className="block truncate text-[13px] font-medium text-foreground">{n.title}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{n.message}</span>
-                      <span className="mt-0.5 block text-[11px] text-muted-foreground/70">{timeAgo(n.createdAt)}</span>
-                    </span>
-                  </button>
-                ))}
+                {notifs?.items.slice(0, 20).map((n) => {
+                  const s = notifStyle(n.type);
+                  return (
+                    <button
+                      key={n.id}
+                      onClick={() => markRead(n.id)}
+                      className={`flex w-full items-start gap-3 border-b border-border/40 px-4 py-3 text-start transition-colors hover:bg-foreground/[0.06] ${n.read ? "" : "bg-primary/[0.04]"}`}
+                    >
+                      <span className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted/70 ${s.color}`}>
+                        {s.icon}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2">
+                          <span className="block truncate text-[13px] font-medium text-foreground">{n.title}</span>
+                          {!n.read && <span className="size-1.5 shrink-0 rounded-full bg-primary" />}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">{n.message}</span>
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground/70">{timeAgo(n.createdAt)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -1,10 +1,12 @@
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   KeyRound, Copy, Trash2, DatabaseBackup, Loader2, ExternalLink,
   Rocket, RefreshCw, Play, Terminal, Eye, EyeOff, Activity, LayoutGrid, Layers, ScrollText, Settings2,
   HardDrive as HardDriveIcon, Cpu as CpuIcon, MemoryStick as MemoryIcon, CalendarClock, Save, Download, Upload, UploadCloud,
+  SquareTerminal, Table2, PlayCircle, Clock3, Database as DatabaseIcon, FolderTree, ChevronRight, ChevronDown,
+  Filter, Columns3, Link2, Zap, ListTree, Search, Server, Users, Info, Wrench,
 } from "lucide-react";
 import { get, post, put, del, downloadBackup } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,10 +25,12 @@ import { Switch } from "@/components/ui/Switch";
 import { cn } from "@/lib/utils";
 import type { Backup, Database, DatabaseConnectionInfo } from "@nexus/types";
 
-type TabKey = "general" | "environment" | "logs" | "monitoring" | "backups" | "advanced";
+type TabKey = "general" | "console" | "database" | "environment" | "logs" | "monitoring" | "backups" | "advanced";
 
 const TABS: TabDef<TabKey>[] = [
   { key: "general", label: "General", icon: LayoutGrid },
+  { key: "console", label: "Console", icon: SquareTerminal },
+  { key: "database", label: "Database", icon: DatabaseIcon },
   { key: "environment", label: "Environment", icon: Layers },
   { key: "logs", label: "Logs", icon: ScrollText },
   { key: "monitoring", label: "Monitoring", icon: Activity },
@@ -385,6 +389,14 @@ export function DatabaseDetailPage() {
           </div>
         )}
 
+        {tab === "console" && (
+          <DbContainerConsole db={db} containerName={containerName} />
+        )}
+
+        {tab === "database" && (
+          <DbBrowser db={db} />
+        )}
+
         {tab === "environment" && (
           <Card>
             <CardHeader>
@@ -732,6 +744,695 @@ function MetricCard({ icon: Icon, label, value }: { icon: ComponentType<{ classN
         <Icon className="size-3.5" /> {label}
       </div>
       <p className="mt-2 truncate text-lg font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+/* ── Container Console (terminal) ─────────────────────────────── */
+
+function DbContainerConsole({ db, containerName }: { db: Database; containerName: string }) {
+  const { toast } = useToast();
+  const id = db.id;
+  const consoleRef = useRef<HTMLDivElement>(null);
+  const [cmd, setCmd] = useState("");
+  const [execBusy, setExecBusy] = useState(false);
+  const running = db.status === "RUNNING";
+
+  const logsQ = useQuery({
+    queryKey: ["database-console-logs", id],
+    queryFn: () => get<{ logs: string }>(`/databases/${id}/logs?tail=200`),
+    enabled: running,
+    refetchInterval: running ? 5000 : false,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+  }, [logsQ.data?.logs]);
+
+  const runExec = async () => {
+    const parts = cmd.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return;
+    setExecBusy(true);
+    try {
+      await post<{ output: string; exitCode: number }>(`/databases/${id}/exec`, { cmd: parts });
+      toast("success", "Command sent", parts.join(" "));
+      setTimeout(() => void logsQ.refetch(), 600);
+    } catch (err) {
+      toast("error", "Command failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setExecBusy(false);
+      setCmd("");
+    }
+  };
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="flex-row items-center justify-between border-b border-border/50 bg-muted/30 py-2.5">
+        <CardTitle className="flex items-center gap-2 text-[13px] font-medium">
+          <Terminal className="size-3.5 text-muted-foreground" /> Container Console
+        </CardTitle>
+        <span className="text-[11px] text-muted-foreground">{running ? "live · 5s" : "container not running"}</span>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div ref={consoleRef} className="h-[420px] overflow-auto bg-black/85 p-4 font-mono text-[11.5px] leading-relaxed">
+          {logsQ.isLoading && <p className="py-8 text-center text-sm text-zinc-500">Loading logs…</p>}
+          {!logsQ.isLoading && logsQ.error && (
+            <p className="py-8 text-center text-sm text-zinc-500">{(logsQ.error as Error).message}</p>
+          )}
+          {!logsQ.isLoading && !logsQ.error && (logsQ.data?.logs || "").trim().length === 0 && (
+            <p className="py-8 text-center text-sm text-zinc-500">
+              {running ? "No output yet — send a command or wait for the container to produce logs." : `Start the ${containerName} container to see its console.`}
+            </p>
+          )}
+          <pre className="whitespace-pre-wrap break-all text-zinc-100">{logsQ.data?.logs ?? ""}</pre>
+        </div>
+        <div className="flex items-center gap-2 border-t border-border/50 bg-muted/30 px-3 py-2.5">
+          <span className="select-none font-mono text-sm font-semibold text-primary">&gt;&gt;</span>
+          <input
+            value={cmd}
+            onChange={(e) => setCmd(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runExec()}
+            placeholder="Type a command… e.g. psql -U root -d postgres"
+            disabled={!running || execBusy}
+            className="h-9 flex-1 bg-transparent font-mono text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-50"
+          />
+          <Button size="sm" onClick={runExec} disabled={!running || execBusy || !cmd.trim()}>
+            {execBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Terminal className="size-3.5" />} Send
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── Database Browser (phpMyAdmin-style) ──────────────────────── */
+
+interface DbObjects {
+  databases: string[];
+  tables: { name: string; size?: string }[];
+  views: string[];
+  indexes: string[];
+  procedures: string[];
+  sequences: string[];
+  triggers: string[];
+  events: string[];
+  roles: string[];
+  version?: string;
+  message?: string;
+}
+
+interface DbTableInfo {
+  columns: { name: string; type: string; nullable: boolean; key: string; defaultValue?: string | null }[];
+  constraints: { name: string; type: string; definition?: string }[];
+  foreignKeys: { name: string; columns: string; references: string }[];
+  triggers: { name: string; event: string; timing: string }[];
+  indexes: { name: string; columns: string; unique: boolean }[];
+  message?: string;
+}
+
+/** Guess a column kind from its SQL type for the grid header badge. */
+function colKind(type: string): "num" | "str" | "other" {
+  const t = type.toLowerCase();
+  if (/int|num|float|double|dec|money|real|serial|bytea|bool/i.test(t)) return "num";
+  if (/char|text|str|json|uuid|date|time|enum|set|xml|blob|binary/i.test(t)) return "str";
+  return "other";
+}
+
+const colKindIcon: Record<string, string> = { num: "123", str: "A-Z", other: "💾" };
+
+function DbBrowser({ db }: { db: Database }) {
+  const { toast } = useToast();
+  const id = db.id;
+  const [objects, setObjects] = useState<DbObjects | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expandedDbs, setExpandedDbs] = useState<Set<string>>(new Set());
+  const [expandedCat, setExpandedCat] = useState<Set<string>>(new Set(["tables"]));
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [tableInfo, setTableInfo] = useState<DbTableInfo | null>(null);
+  const [infoLoading, setInfoLoading] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [rows, setRows] = useState<{ columns: string[]; rows: string[][] } | null>(null);
+  const [rowsLoading, setRowsLoading] = useState(false);
+  const [rowsError, setRowsError] = useState<string | null>(null);
+  const [dataTab, setDataTab] = useState<"data" | "properties" | "diagram">("data");
+  const [structTab, setStructTab] = useState<"columns" | "constraints" | "fks" | "triggers" | "indexes">("columns");
+  const quote = (v: string) => '"' + v.replace(/"/g, "") + '"';
+
+  const loadObjects = async () => {
+    setLoading(true);
+    try {
+      const res = await get<DbObjects>(`/databases/${id}/objects`);
+      setObjects(res);
+      setMsg(res.message ?? null);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Failed to load database objects");
+      setObjects(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadObjects();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const toggle = (set: Set<string>, key: string): Set<string> => {
+    const next = new Set(set);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  };
+
+  const selectTable = async (name: string) => {
+    setSelectedTable(name);
+    setDataTab("data");
+    setStructTab("columns");
+    setRows(null);
+    setRowsError(null);
+    setInfoLoading(true);
+    try {
+      const [infoRes] = await Promise.all([
+        get<DbTableInfo>(`/databases/${id}/table-info?table=${encodeURIComponent(name)}`),
+        loadRows(name, ""),
+      ]);
+      setTableInfo(infoRes);
+    } catch (err) {
+      toast("error", "Failed to load table", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setInfoLoading(false);
+    }
+  };
+
+  const loadRows = async (name: string, where: string) => {
+    setRowsLoading(true);
+    setRowsError(null);
+    try {
+      const sql = `SELECT * FROM ${quote(name)}${where.trim() ? ` WHERE ${where.trim()}` : ""} LIMIT 100;`;
+      const res = await post<{ columns: string[]; rows: string[][]; truncated: boolean; message?: string }>(`/databases/${id}/query`, { sql });
+      setRows({ columns: res.columns, rows: res.rows });
+    } catch (err) {
+      setRowsError(err instanceof Error ? err.message : "Query failed");
+      setRows(null);
+    } finally {
+      setRowsLoading(false);
+    }
+  };
+
+  const runFilter = () => {
+    if (!selectedTable) return;
+    void loadRows(selectedTable, filter);
+  };
+
+  const currentDb = objects?.databases?.find((d) => d === (db.dbName ?? db.name)) ?? objects?.databases?.[0] ?? "";
+  const allTables = objects?.tables ?? [];
+  const counts: Record<string, number> = {
+    views: objects?.views?.length ?? 0,
+    indexes: objects?.indexes?.length ?? 0,
+    procedures: objects?.procedures?.length ?? 0,
+    sequences: objects?.sequences?.length ?? 0,
+    triggers: objects?.triggers?.length ?? 0,
+    events: objects?.events?.length ?? 0,
+  };
+
+  const TreeRow = ({
+    label, count, depth, expanded, hasChildren, onClick, active = false, icon,
+  }: {
+    label: string; count?: number; depth: number; expanded?: boolean; hasChildren?: boolean;
+    onClick: () => void; active?: boolean; icon?: React.ReactNode;
+  }) => (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors",
+        active ? "bg-primary/10 text-primary" : "text-foreground/85 hover:bg-muted/60",
+      )}
+      style={{ paddingLeft: 8 + depth * 14 }}
+    >
+      {hasChildren ? (
+        expanded ? <ChevronDown className="size-3 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
+      ) : (
+        <span className="w-3 shrink-0" />
+      )}
+      {icon ?? <Table2 className="size-3.5 shrink-0 text-muted-foreground" />}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count !== undefined && <span className="shrink-0 text-[10.5px] text-muted-foreground">{count}</span>}
+    </button>
+  );
+
+  const renderTableRows = () => (
+    <div className="space-y-0.5">
+      {allTables.map((t) => (
+        <button
+          key={t.name}
+          onClick={() => void selectTable(t.name)}
+          className={cn(
+            "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12.5px] transition-colors",
+            selectedTable === t.name ? "bg-primary/10 text-primary" : "text-foreground/85 hover:bg-muted/60",
+          )}
+          style={{ paddingLeft: 8 + 3 * 14 }}
+        >
+          <span className="w-3 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{t.name}</span>
+          {t.size && <span className="shrink-0 text-[10.5px] text-muted-foreground">{t.size}</span>}
+        </button>
+      ))}
+      {allTables.length === 0 && <p className="px-2 py-1 text-[11.5px] text-muted-foreground">No tables</p>}
+    </div>
+  );
+
+  const renderCatRows = (key: string, items: string[]) => (
+    <div className="space-y-0.5">
+      {items.map((n) => (
+        <div key={n} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted-foreground" style={{ paddingLeft: 8 + 3 * 14 }}>
+          <span className="min-w-0 flex-1 truncate">{n}</span>
+        </div>
+      ))}
+      {items.length === 0 && <p className="px-2 py-1 text-[11.5px] text-muted-foreground">None</p>}
+    </div>
+  );
+
+  const sidebarItems = [
+    { key: "views", label: "Views", count: counts.views, items: objects?.views ?? [] },
+    { key: "indexes", label: "Índices", count: counts.indexes, items: objects?.indexes ?? [] },
+    { key: "procedures", label: "Procedures", count: counts.procedures, items: objects?.procedures ?? [] },
+    { key: "sequences", label: "Sequências", count: counts.sequences, items: objects?.sequences ?? [] },
+    { key: "triggers", label: "Triggers", count: counts.triggers, items: objects?.triggers ?? [] },
+    { key: "events", label: "Eventos", count: counts.events, items: objects?.events ?? [] },
+  ];
+
+  const colTypeOf = (name: string): string => tableInfo?.columns.find((c) => c.name === name)?.type ?? "";
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
+      {/* ── Sidebar tree ── */}
+      <Card className="h-fit lg:max-h-[calc(100vh-220px)] lg:overflow-auto">
+        <CardHeader className="border-b border-border/50">
+          <div className="flex items-center gap-2">
+            <DatabaseIcon className="size-4 text-primary" />
+            <div className="min-w-0">
+              <p className="truncate text-[12px] font-semibold">selected DB: <span className="font-mono text-primary">{currentDb || "—"}</span></p>
+              <p className="text-[11px] text-muted-foreground">{objects?.version ? `🐘 ${objects.version}` : db.type}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="ghost" className="absolute right-3 top-3" onClick={() => void loadObjects()} disabled={loading} title="Reload objects">
+            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-2 p-3">
+          {loading && <Skeleton className="h-40" />}
+          {!loading && msg && !objects && <p className="py-2 text-xs text-muted-foreground">{msg}</p>}
+          {!loading && objects && (
+            <>
+              {/* Databases */}
+              <p className="flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <ChevronDown className="size-3" /> Bancos de dados
+              </p>
+              <div className="space-y-0.5">
+                {objects.databases.map((d) => {
+                  const isCurrent = d === currentDb;
+                  const expanded = expandedDbs.has(d);
+                  return (
+                    <div key={d}>
+                      <TreeRow
+                        label={d}
+                        depth={1}
+                        hasChildren={isCurrent}
+                        expanded={expanded}
+                        active={isCurrent}
+                        onClick={() => isCurrent && setExpandedDbs((s) => toggle(s, d))}
+                        icon={isCurrent ? <DatabaseIcon className="size-3.5 shrink-0 text-primary" /> : <DatabaseIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+                      />
+                      {isCurrent && expanded && (
+                        <div className="mt-0.5 space-y-0.5">
+                          {/* Tabelas */}
+                          <div>
+                            <TreeRow
+                              label="Tabelas"
+                              count={allTables.length}
+                              depth={2}
+                              hasChildren
+                              expanded={expandedCat.has("tables")}
+                              onClick={() => setExpandedCat((s) => toggle(s, "tables"))}
+                              icon={<ListTree className="size-3.5 shrink-0 text-muted-foreground" />}
+                            />
+                            {expandedCat.has("tables") && renderTableRows()}
+                          </div>
+                          {/* other categories */}
+                          {sidebarItems.map((it) => (
+                            <div key={it.key}>
+                              <TreeRow
+                                label={it.label}
+                                count={it.count}
+                                depth={2}
+                                hasChildren={it.items.length > 0}
+                                expanded={expandedCat.has(it.key)}
+                                onClick={() => setExpandedCat((s) => toggle(s, it.key))}
+                                icon={<Zap className="size-3.5 shrink-0 text-muted-foreground" />}
+                              />
+                              {expandedCat.has(it.key) && renderCatRows(it.key, it.items)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Bottom sections */}
+              <div className="mt-2 border-t border-border/50 pt-2">
+                <TreeRow label="Usuários" count={objects.roles.length} depth={1} onClick={() => toast("info", "Usuários", `${objects.roles.join(", ") || "none"}`)} icon={<Users className="size-3.5 shrink-0 text-muted-foreground" />} />
+                <TreeRow label="Administrar" depth={1} onClick={() => toast("info", "Administrar", "Database management actions are available on the General tab.")} icon={<Wrench className="size-3.5 shrink-0 text-muted-foreground" />} />
+                <TreeRow label="Informações do sistema" depth={1} onClick={() => toast("info", "Informações", `${objects.version ?? db.type} · ${db.image}`)} icon={<Info className="size-3.5 shrink-0 text-muted-foreground" />} />
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Main panel ── */}
+      <div className="space-y-4">
+        {/* View tabs */}
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-border/60 scrollbar-hide">
+          {[
+            { key: "data" as const, label: "💾 Dados", icon: Table2 },
+            { key: "properties" as const, label: "📋 Propriedades", icon: Columns3 },
+            { key: "diagram" as const, label: "📐 Diagrama", icon: Link2 },
+          ].map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setDataTab(key)}
+              className={cn(
+                "relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors",
+                dataTab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground/70",
+              )}
+            >
+              <Icon className="size-4" />
+              {label}
+              {dataTab === key && <span className="absolute bottom-0 start-4 end-4 h-0.5 rounded-full bg-primary" />}
+            </button>
+          ))}
+        </div>
+
+        {!selectedTable ? (
+          <Card>
+            <CardContent className="py-16 text-center">
+              <FolderTree className="mx-auto size-10 text-muted-foreground/50" />
+              <p className="mt-3 text-sm font-medium">Select a table</p>
+              <p className="mx-auto mt-1 max-w-sm text-[13px] text-muted-foreground">
+                Pick a table from the tree on the left to browse its data, filter with SQL and inspect its structure.
+              </p>
+            </CardContent>
+          </Card>
+        ) : dataTab === "properties" ? (
+          <Card>
+            <CardHeader className="flex-row items-center justify-between">
+              <CardTitle className="text-sm">Propriedades de <span className="font-mono">{selectedTable}</span></CardTitle>
+              {infoLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+            </CardHeader>
+            <CardContent>
+              {tableInfo && (
+                <div className="overflow-auto rounded-xl border border-border/60">
+                  <table className="w-full border-collapse text-[12px]">
+                    <thead className="bg-muted/80">
+                      <tr>
+                        <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Column</th>
+                        <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Type</th>
+                        <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Nullable</th>
+                        <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Key</th>
+                        <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Default</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableInfo.columns.map((c) => (
+                        <tr key={c.name} className="hover:bg-muted/40">
+                          <td className="border-b border-border/30 px-3 py-1.5 font-mono">{c.name}</td>
+                          <td className="border-b border-border/30 px-3 py-1.5 text-muted-foreground">{c.type}</td>
+                          <td className="border-b border-border/30 px-3 py-1.5">{c.nullable ? "YES" : "NO"}</td>
+                          <td className="border-b border-border/30 px-3 py-1.5 font-mono text-primary">{c.key || "—"}</td>
+                          <td className="max-w-[220px] truncate border-b border-border/30 px-3 py-1.5 font-mono text-muted-foreground">{c.defaultValue ?? "NULL"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : dataTab === "diagram" ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Diagrama de <span className="font-mono">{selectedTable}</span></CardTitle>
+            </CardHeader>
+            <CardContent>
+              {tableInfo && tableInfo.foreignKeys.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">This table has no foreign keys.</p>
+              ) : (
+                <div className="space-y-2">
+                  {tableInfo?.foreignKeys.map((fk) => (
+                    <div key={fk.name} className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 px-3 py-2.5 font-mono text-[12.5px]">
+                      <Link2 className="size-3.5 text-primary" />
+                      <span className="text-primary">{fk.name}</span>
+                      <span className="text-muted-foreground">({fk.columns})</span>
+                      <span className="text-muted-foreground">→</span>
+                      <span>{fk.references}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          /* Data view */
+          <>
+            {/* SQL filter */}
+            <Card>
+              <CardContent className="flex items-center gap-2 p-3">
+                <Search className="size-4 shrink-0 text-muted-foreground" />
+                <input
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && runFilter()}
+                  placeholder="Insira uma expressão SQL para filtrar os resultados (use Ctrl+Espaço)"
+                  spellCheck={false}
+                  className="h-9 flex-1 bg-transparent font-mono text-[12.5px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+                />
+                <Button size="sm" onClick={runFilter} disabled={rowsLoading}>
+                  {rowsLoading ? <Loader2 className="size-3.5 animate-spin" /> : <Filter className="size-3.5" />} Filtrar
+                </Button>
+              </CardContent>
+            </Card>
+
+            {rowsError && (
+              <Card className="border-destructive/40">
+                <CardContent className="py-4">
+                  <pre className="whitespace-pre-wrap font-mono text-[13px] text-destructive">{rowsError}</pre>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Data grid */}
+            <Card>
+              <CardHeader className="flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <Table2 className="size-4 text-muted-foreground" /> <span className="font-mono">{selectedTable}</span>
+                </CardTitle>
+                {rowsLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+              </CardHeader>
+              <CardContent>
+                {rows && rows.columns.length > 0 ? (
+                  <div className="max-h-[420px] overflow-auto rounded-xl border border-border/60">
+                    <table className="w-full border-collapse text-[12px]">
+                      <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+                        <tr>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">#</th>
+                          {rows.columns.map((c) => {
+                            const kind = colKind(colTypeOf(c));
+                            return (
+                              <th key={c} className="border-b border-border/60 px-3 py-2 text-left font-medium">
+                                <span className="mr-1.5 text-[10px] text-muted-foreground">{colKindIcon[kind]}</span>
+                                {c}
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.rows.map((row, i) => (
+                          <tr key={i} className="hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-3 py-1.5 text-muted-foreground tabular-nums">{i + 1}</td>
+                            {row.map((cell, j) => (
+                              <td key={j} className="max-w-[280px] truncate border-b border-border/30 px-3 py-1.5 font-mono">
+                                {cell === "" ? <span className="text-muted-foreground/60">[NULL]</span> : cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {rows.rows.length === 0 && (
+                          <tr>
+                            <td colSpan={rows.columns.length + 1} className="px-3 py-4 text-center text-muted-foreground">0 rows</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    {rowsError ? "Query failed — check the error above." : "Loading rows…"}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Structure tabs */}
+            <Card>
+              <div className="flex items-center gap-1 overflow-x-auto border-b border-border/60 px-2 scrollbar-hide">
+                {[
+                  { key: "columns" as const, label: "Colunas", icon: Columns3 },
+                  { key: "constraints" as const, label: "Constraints", icon: ListTree },
+                  { key: "fks" as const, label: "Chaves Estrangeiras", icon: Link2 },
+                  { key: "triggers" as const, label: "Triggers", icon: Zap },
+                  { key: "indexes" as const, label: "Índices", icon: Search },
+                ].map(({ key, label, icon: Icon }) => (
+                  <button
+                    key={key}
+                    onClick={() => setStructTab(key)}
+                    className={cn(
+                      "relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-3.5 py-2.5 text-[12.5px] font-medium transition-colors",
+                      structTab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground/70",
+                    )}
+                  >
+                    <Icon className="size-3.5" />
+                    {label}
+                    {structTab === key && <span className="absolute bottom-0 start-3 end-3 h-0.5 rounded-full bg-primary" />}
+                  </button>
+                ))}
+              </div>
+              <CardContent className="p-0">
+                {infoLoading ? (
+                  <div className="p-8 text-center"><Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" /></div>
+                ) : structTab === "columns" ? (
+                  <div className="overflow-auto">
+                    <table className="w-full border-collapse text-[12px]">
+                      <thead className="bg-muted/80">
+                        <tr>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Name</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Type</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Nullable</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Key</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Default</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(tableInfo?.columns ?? []).map((c) => (
+                          <tr key={c.name} className="hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono">{c.name}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5 text-muted-foreground">{c.type}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5">{c.nullable ? "YES" : "NO"}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono text-primary">{c.key || "—"}</td>
+                            <td className="max-w-[220px] truncate border-b border-border/30 px-3 py-1.5 font-mono text-muted-foreground">{c.defaultValue ?? "NULL"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : structTab === "constraints" ? (
+                  <div className="overflow-auto">
+                    <table className="w-full border-collapse text-[12px]">
+                      <thead className="bg-muted/80">
+                        <tr>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Name</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Type</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Definition</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(tableInfo?.constraints ?? []).map((c) => (
+                          <tr key={c.name} className="hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono">{c.name}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5"><span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">{c.type}</span></td>
+                            <td className="max-w-[420px] truncate border-b border-border/30 px-3 py-1.5 font-mono text-muted-foreground">{c.definition ?? "—"}</td>
+                          </tr>
+                        ))}
+                        {(tableInfo?.constraints ?? []).length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">No constraints</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : structTab === "fks" ? (
+                  <div className="overflow-auto">
+                    <table className="w-full border-collapse text-[12px]">
+                      <thead className="bg-muted/80">
+                        <tr>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Name</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Columns</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">References</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(tableInfo?.foreignKeys ?? []).map((fk) => (
+                          <tr key={fk.name} className="hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono text-primary">{fk.name}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono">{fk.columns}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono text-muted-foreground">{fk.references}</td>
+                          </tr>
+                        ))}
+                        {(tableInfo?.foreignKeys ?? []).length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">No foreign keys</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : structTab === "triggers" ? (
+                  <div className="overflow-auto">
+                    <table className="w-full border-collapse text-[12px]">
+                      <thead className="bg-muted/80">
+                        <tr>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Name</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Event</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Timing</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(tableInfo?.triggers ?? []).map((t) => (
+                          <tr key={t.name} className="hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono">{t.name}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5"><span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">{t.event}</span></td>
+                            <td className="max-w-[420px] truncate border-b border-border/30 px-3 py-1.5 font-mono text-muted-foreground">{t.timing}</td>
+                          </tr>
+                        ))}
+                        {(tableInfo?.triggers ?? []).length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">No triggers</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="overflow-auto">
+                    <table className="w-full border-collapse text-[12px]">
+                      <thead className="bg-muted/80">
+                        <tr>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Name</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Columns</th>
+                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">Unique</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(tableInfo?.indexes ?? []).map((ix) => (
+                          <tr key={ix.name} className="hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono">{ix.name}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5 font-mono">{ix.columns}</td>
+                            <td className="border-b border-border/30 px-3 py-1.5">{ix.unique ? "YES" : "NO"}</td>
+                          </tr>
+                        ))}
+                        {(tableInfo?.indexes ?? []).length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">No indexes</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </>
+        )}
+      </div>
     </div>
   );
 }

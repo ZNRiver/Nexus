@@ -121,6 +121,7 @@ export class GameServersService {
     const queue = new JobQueue(this.db);
     await queue.enqueue("game-server-create", { gameServerId: id });
     await this.ctx.audit({ action: "game.create", resourceType: "game-server", resourceId: id, resourceName: name, serverId: input.serverId });
+    await this.ctx.notify("game.created", "Game server created", `${name} (${flavor ?? game}) was created — starting the container…`);
     return this.getPublic(id);
   }
 

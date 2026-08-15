@@ -100,6 +100,10 @@ export type AgentAction =
   | "database.create"
   | "db.backup"
   | "db.restore"
+  | "db.query"
+  | "db.schema"
+  | "db.objects"
+  | "db.tableInfo"
   | "volume.backup"
   | "volume.restore"
   | "file.remove"
@@ -193,6 +197,40 @@ export interface DbBackupPayload {
   fileName: string;
 }
 
+export interface DbQueryPayload {
+  type: string;
+  containerId: string;
+  name: string;
+  username?: string;
+  password?: string;
+  sql: string;
+}
+
+export interface DbSchemaPayload {
+  type: string;
+  containerId: string;
+  name: string;
+  username?: string;
+  password?: string;
+}
+
+export interface DbObjectsPayload {
+  type: string;
+  containerId: string;
+  name: string;
+  username?: string;
+  password?: string;
+}
+
+export interface DbTableInfoPayload {
+  type: string;
+  containerId: string;
+  name: string;
+  table: string;
+  username?: string;
+  password?: string;
+}
+
 export interface DbRestorePayload {
   backupId: string;
   databaseId: string;
@@ -277,6 +315,29 @@ export interface AgentActionResultMap {
   "database.create": { containerId: string };
   "db.backup": { path: string; sizeBytes: number };
   "db.restore": { restored: boolean };
+  "db.query": { columns: string[]; rows: string[][]; truncated: boolean; message?: string };
+  "db.schema": { tables: { name: string; columns: { name: string; type: string }[] }[]; message?: string };
+  "db.objects": {
+    databases: string[];
+    tables: { name: string; size?: string }[];
+    views: string[];
+    indexes: string[];
+    procedures: string[];
+    sequences: string[];
+    triggers: string[];
+    events: string[];
+    roles: string[];
+    version?: string;
+    message?: string;
+  };
+  "db.tableInfo": {
+    columns: { name: string; type: string; nullable: boolean; key: string; defaultValue?: string | null }[];
+    constraints: { name: string; type: string; definition?: string }[];
+    foreignKeys: { name: string; columns: string; references: string }[];
+    triggers: { name: string; event: string; timing: string }[];
+    indexes: { name: string; columns: string; unique: boolean }[];
+    message?: string;
+  };
   "volume.backup": { path: string; sizeBytes: number };
   "volume.restore": { restored: boolean };
   "file.remove": { removed: boolean };

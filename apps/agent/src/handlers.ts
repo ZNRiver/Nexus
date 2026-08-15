@@ -48,6 +48,10 @@ const ALLOWED_ACTIONS = new Set<AgentAction>([
   "database.create",
   "db.backup",
   "db.restore",
+  "db.query",
+  "db.schema",
+  "db.objects",
+  "db.tableInfo",
   "volume.backup",
   "volume.restore",
   "file.remove",
@@ -260,6 +264,31 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
       }
       case "db.restore": {
         const result = await restoreBackup(docker, payload as never, (msg) => emitEvent("job.progress", String(payload.databaseId ?? ""), { message: msg }));
+        ctx.sendResult(requestId, result);
+        return;
+      }
+
+      case "db.query": {
+        const { runDbQuery } = await import("./databases/console");
+        const result = await runDbQuery(docker, payload as never);
+        ctx.sendResult(requestId, result);
+        return;
+      }
+      case "db.schema": {
+        const { getDbSchema } = await import("./databases/console");
+        const result = await getDbSchema(docker, payload as never);
+        ctx.sendResult(requestId, result);
+        return;
+      }
+      case "db.objects": {
+        const { getDbObjects } = await import("./databases/console");
+        const result = await getDbObjects(docker, payload as never);
+        ctx.sendResult(requestId, result);
+        return;
+      }
+      case "db.tableInfo": {
+        const { getDbTableInfo } = await import("./databases/console");
+        const result = await getDbTableInfo(docker, payload as never);
         ctx.sendResult(requestId, result);
         return;
       }

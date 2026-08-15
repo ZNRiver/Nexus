@@ -196,6 +196,7 @@ export class DatabasesService {
     await queue.enqueue("database-create", { databaseId: id });
 
     await this.ctx.audit({ action: "database.create", resourceType: "database", resourceId: id, resourceName: name, serverId: input.serverId });
+    await this.ctx.notify("database.created", "Database created", `${name} (${type}) was created — starting the container…`);
     return toDatabase(row);
   }
 
@@ -324,6 +325,108 @@ export class DatabasesService {
   }
 
   /** Run a command inside the database container. */
+  /* ── Console (run SQL / schema browser) ─────────────────────── */
+
+  async query(id: string, sql: string): Promise<{ columns: string[]; rows: string[][]; truncated: boolean; message?: string }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const result = await hub.request(row.server_id, "db.query", {
+      type: row.type,
+      containerId: row.container_id ?? "",
+      name: row.db_name ?? row.name,
+      username: row.username,
+      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+      sql,
+    } as never, { timeoutMs: 60 * 1000 }) as { columns: string[]; rows: string[][]; truncated: boolean; message?: string };
+    await this.ctx.audit({ action: "database.query", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { sql: sql.slice(0, 200) } });
+    return result;
+  }
+
+  async schema(id: string): Promise<{ tables: { name: string; columns: { name: string; type: string }[] }[]; message?: string }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const result = await hub.request(row.server_id, "db.schema", {
+      type: row.type,
+      containerId: row.container_id ?? "",
+      name: row.db_name ?? row.name,
+      username: row.username,
+      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+    } as never, { timeoutMs: 60 * 1000 }) as { tables: { name: string; columns: { name: string; type: string }[] }[]; message?: string };
+    await this.ctx.audit({ action: "database.schema.read", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id });
+    return result;
+  }
+
+  async objects(id: string): Promise<{
+    databases: string[];
+    tables: { name: string; size?: string }[];
+    views: string[];
+    indexes: string[];
+    procedures: string[];
+    sequences: string[];
+    triggers: string[];
+    events: string[];
+    roles: string[];
+    version?: string;
+    message?: string;
+  }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const result = await hub.request(row.server_id, "db.objects", {
+      type: row.type,
+      containerId: row.container_id ?? "",
+      name: row.db_name ?? row.name,
+      username: row.username,
+      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+    } as never, { timeoutMs: 60 * 1000 }) as {
+      databases: string[];
+      tables: { name: string; size?: string }[];
+      views: string[];
+      indexes: string[];
+      procedures: string[];
+      sequences: string[];
+      triggers: string[];
+      events: string[];
+      roles: string[];
+      version?: string;
+      message?: string;
+    };
+    await this.ctx.audit({ action: "database.objects.read", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id });
+    return result;
+  }
+
+  async tableInfo(id: string, table: string): Promise<{
+    columns: { name: string; type: string; nullable: boolean; key: string; defaultValue?: string | null }[];
+    constraints: { name: string; type: string; definition?: string }[];
+    foreignKeys: { name: string; columns: string; references: string }[];
+    triggers: { name: string; event: string; timing: string }[];
+    indexes: { name: string; columns: string; unique: boolean }[];
+    message?: string;
+  }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const result = await hub.request(row.server_id, "db.tableInfo", {
+      type: row.type,
+      containerId: row.container_id ?? "",
+      name: row.db_name ?? row.name,
+      table,
+      username: row.username,
+      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+    } as never, { timeoutMs: 60 * 1000 }) as {
+      columns: { name: string; type: string; nullable: boolean; key: string; defaultValue?: string | null }[];
+      constraints: { name: string; type: string; definition?: string }[];
+      foreignKeys: { name: string; columns: string; references: string }[];
+      triggers: { name: string; event: string; timing: string }[];
+      indexes: { name: string; columns: string; unique: boolean }[];
+      message?: string;
+    };
+    await this.ctx.audit({ action: "database.tableinfo.read", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { table } });
+    return result;
+  }
+
   async exec(id: string, cmd: string[]): Promise<{ output: string; exitCode: number }> {
     const row = await this.get(id);
     const hub = this.ctx.hub;
@@ -434,6 +537,7 @@ export class DatabasesService {
     const queue = new JobQueue(this.db);
     await queue.enqueue("database-backup", { backupId: id, databaseId, scheduled: opts.scheduled ?? false });
     await this.ctx.audit({ action: "backup.create", resourceType: "backup", resourceId: id, resourceName: row.name, serverId: row.server_id });
+    await this.ctx.notify("database.backup.started", "Backup started", `Backing up ${row.name}…`);
     return this.getBackup(id);
   }
 
@@ -513,6 +617,7 @@ export class DatabasesService {
     } as never, { timeoutMs: 10 * 60 * 1000 });
 
     await this.ctx.audit({ action: "backup.restore", resourceType: "backup", resourceId: backupId, resourceName: row.name, serverId: row.server_id });
+    await this.ctx.notify("backup.restored", "Backup restored", `${row.name} was restored from backup ${backupId.slice(-8)}.`);
   }
 
   async listBackups(databaseId: string): Promise<Backup[]> {

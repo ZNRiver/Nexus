@@ -64,6 +64,7 @@ export class AgentHub {
       pending: new Map(),
     });
 
+    const wasOnline = server.status === "ONLINE";
     await this.db.run(
       `UPDATE servers SET status = 'ONLINE', agent_version = ?, last_heartbeat_at = ?, last_error = NULL, updated_at = ? WHERE id = ?`,
       [version, new Date().toISOString(), new Date().toISOString(), serverId],
@@ -74,6 +75,18 @@ export class AgentHub {
       serverId,
     ]);
     eventHub.emit({ type: "server.status", serverId, status: "ONLINE" });
+    // Notify on a real reconnect (was offline/error/installing before).
+    if (!wasOnline) {
+      try {
+        const { NotificationsService } = await import("../services/notifications.service");
+        const owner = await this.db.get<{ id: string }>(`SELECT id FROM users ORDER BY created_at LIMIT 1`);
+        if (owner) {
+          await new NotificationsService(this.db).create(owner.id, "server.online", "Server online", `${server.name} reconnected — agent is ready.`);
+        }
+      } catch (err) {
+        log.warn("failed to notify server online", { serverId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
     log.info("agent registered", { serverId, agentId, version });
   }
 

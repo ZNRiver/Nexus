@@ -193,6 +193,7 @@ export class ApplicationsService {
     });
 
     await this.ctx.audit({ action: "application.create", resourceType: "application", resourceId: appId, resourceName: name, serverId: input.serverId });
+    await this.ctx.notify("application.created", "Application created", `${name} was created — deploy it to get it running.`);
     return toApplication(row);
   }
 
@@ -280,6 +281,7 @@ export class ApplicationsService {
     await queue.enqueue("deployment", { deploymentId, applicationId: id });
 
     await this.ctx.audit({ action: "application.deploy", resourceType: "deployment", resourceId: deploymentId, resourceName: app.name, serverId: app.server_id });
+    await this.ctx.notify("deployment.started", "Deployment started", `${app.name} — building and deploying ${opts.branch ?? app.branch}…`);
     return { deploymentId };
   }
 
@@ -304,6 +306,7 @@ export class ApplicationsService {
     await queue.enqueue("deployment", { deploymentId, applicationId: id, rollbackFrom: targetDeploymentId });
 
     await this.ctx.audit({ action: "deployment.rollback", resourceType: "deployment", resourceId: deploymentId, resourceName: app.name, serverId: app.server_id, metadata: { from: targetDeploymentId } });
+    await this.ctx.notify("deployment.started", "Rollback started", `${app.name} — rolling back to deployment ${targetDeploymentId.slice(-8)}…`);
     return { deploymentId };
   }
 
@@ -481,6 +484,7 @@ export class ApplicationsService {
     const queue = new JobQueue(this.db);
     await queue.enqueue("application-backup", { backupId: id, applicationId, scheduled: opts.scheduled ?? false });
     await this.ctx.audit({ action: "backup.create", resourceType: "backup", resourceId: id, resourceName: row.name, serverId: row.server_id });
+    await this.ctx.notify("database.backup.started", "Backup started", `Backing up the volume of ${row.name}…`);
     return this.getBackup(id);
   }
 
@@ -580,6 +584,7 @@ export class ApplicationsService {
     }
 
     await this.ctx.audit({ action: "backup.restore", resourceType: "backup", resourceId: backupId, resourceName: app.name, serverId: app.server_id, metadata: { stoppedAndRestarted: wasRunning } });
+    await this.ctx.notify("backup.restored", "Backup restored", `${app.name} was restored from backup ${backupId.slice(-8)}.`);
   }
 
   async listBackups(applicationId: string): Promise<Backup[]> {
