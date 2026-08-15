@@ -129,6 +129,7 @@ worker.register("database-create", (job) => databasesService.runDatabaseCreate(j
 worker.register("database-backup", (job) => databasesService.runBackup(job));
 worker.register("application-backup", (job) => applicationsService.runBackup(job));
 worker.register("game-server-create", (job) => gamesService.runCreate(job));
+worker.register("game-backup", (job) => gamesService.runBackup(job));
 worker.start();
 
 /* ── WebSocket: agents + dashboard ───────────────────────────────── */
@@ -232,6 +233,15 @@ setInterval(() => {
     if (total > 0) log.info("scheduled backups started", { count: total, databases: dbStarted, applications: appStarted });
   })().catch((err) => log.error("backup scheduler failed", { error: err instanceof Error ? err.message : String(err) }));
 }, 30_000);
+
+/* ── Game schedule tick: fire due cron schedules ────────────────── */
+setInterval(() => {
+  void gamesService.runDueSchedules()
+    .then((ran) => {
+      if (ran > 0) log.info("game schedules fired", { count: ran });
+    })
+    .catch((err) => log.error("game schedule tick failed", { error: err instanceof Error ? err.message : String(err) }));
+}, 15_000);
 
 /* ── Watchdog: heartbeat staleness + retention cleanup ──────────── */
 setInterval(() => {

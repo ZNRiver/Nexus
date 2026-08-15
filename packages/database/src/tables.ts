@@ -260,12 +260,15 @@ export interface BackupRow {
   id: string;
   database_id: string | null;
   application_id: string | null;
+  game_server_id: string | null;
   server_id: string;
   type: string;
   status: string;
   size_bytes: number | null;
   path: string | null;
   error: string | null;
+  sha1: string | null;
+  locked: boolean | number;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -299,6 +302,31 @@ export interface GameServerRow {
   status: string;
   container_id: string | null;
   volume_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GameScheduleRow {
+  id: string;
+  game_server_id: string;
+  name: string;
+  cron: string;
+  command: string;
+  enabled: boolean | number;
+  only_online: boolean | number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GameAllocationRow {
+  id: string;
+  game_server_id: string;
+  ip: string;
+  port: number;
+  notes: string | null;
+  is_primary: boolean | number;
   created_at: string;
   updated_at: string;
 }

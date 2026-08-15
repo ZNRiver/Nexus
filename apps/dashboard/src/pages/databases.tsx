@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Database as DbIcon, Plus, Loader2, CircleHelp } from "lucide-react";
+import { Database as DbIcon, Plus, Loader2, CircleHelp, ArrowRight } from "lucide-react";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
 import { get, post } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/page-header";
 import { TableSkeleton } from "@/components/skeleton";
 import { EmptyState } from "@/components/empty-state";
 import { useToast } from "@/components/toast";
+import { OperationLogPanel } from "@/components/operation-log-panel";
 import { cn } from "@/lib/utils";
 import { formatBytes, timeAgo } from "@/lib/format";
 import type { Database, DatabaseType, Project, Server } from "@nexus/types";
@@ -45,6 +46,8 @@ export function DatabasesPage({ mode }: { mode?: string }) {
   const [params, setParams] = useSearchParams();
   const [open, setOpen] = useState(mode === "new" || params.get("new") === "1");
   const [creating, setCreating] = useState(false);
+  // Newly created database id — shows the live progress panel while it provisions.
+  const [progressDb, setProgressDb] = useState<string | null>(null);
   const modalContentRef = useRef<HTMLDivElement>(null);
   const [form, setForm] = useState({
     serverId: "",
@@ -98,8 +101,11 @@ export function DatabasesPage({ mode }: { mode?: string }) {
         password: form.password || undefined,
         projectId: form.projectId || undefined,
       });
-      toast("success", "Database created", form.name);
-      navigate(`/databases/${res.database.id}`);
+      toast("success", "Database created", `${form.name} — provisioning the container…`);
+      setOpen(false);
+      setParams({}, { replace: true });
+      setProgressDb(res.database.id);
+      setCreating(false);
     } catch (err) {
       toast("error", "Creation failed", err instanceof Error ? err.message : "Unknown error");
       setCreating(false);
@@ -120,41 +126,57 @@ export function DatabasesPage({ mode }: { mode?: string }) {
         }
       />
 
-      {isLoading ? (
-        <TableSkeleton rows={6} cols={5} />
-      ) : !dbs?.items.length ? (
-        <EmptyState
-          icon={<DbIcon className="size-5" />}
-          title="No databases"
-          description="Provision a managed database on any server. Storage is backed by a persistent volume."
-          actionLabel="Create Database"
-          onAction={openModal}
-        />
-      ) : (
-        <Card className="overflow-hidden">
-          <div className="divide-y divide-border/50">
-            {dbs.items.map((db) => (
-              <Link key={db.id} to={`/databases/${db.id}`} className="flex items-center gap-4 px-5 py-4 transition-colors hover:bg-foreground/[0.05]">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted">
-                  <DbLogo type={db.type} className={cn("size-5", DB_COLORS[db.type])} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-sm font-semibold">{db.name}</p>
-                    <span className="hidden rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:inline">
-                      {db.type}
-                    </span>
-                  </div>
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {db.image} · :{db.port} · {formatBytes(db.storageLimitBytes)} · {timeAgo(db.updatedAt)}
-                  </p>
-                </div>
-                <StatusBadge status={db.status} className="shrink-0" />
-              </Link>
-            ))}
+      <div className={cn("mt-0", progressDb && "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]")}>
+        <div>
+          {isLoading ? (
+            <TableSkeleton rows={6} cols={5} />
+          ) : !dbs?.items.length ? (
+            <EmptyState
+              icon={<DbIcon className="size-5" />}
+              title="No databases"
+              description="Provision a managed database on any server. Storage is backed by a persistent volume."
+              actionLabel="Create Database"
+              onAction={openModal}
+            />
+          ) : (
+            <Card className="overflow-hidden">
+              <div className="divide-y divide-border/50">
+                {dbs.items.map((db) => (
+                  <Link key={db.id} to={`/databases/${db.id}`} className="flex items-center gap-4 px-5 py-4 transition-colors hover:bg-foreground/[0.05]">
+                    <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted">
+                      <DbLogo type={db.type} className={cn("size-5", DB_COLORS[db.type])} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-semibold">{db.name}</p>
+                        <span className="hidden rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:inline">
+                          {db.type}
+                        </span>
+                      </div>
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {db.image} · :{db.port} · {formatBytes(db.storageLimitBytes)} · {timeAgo(db.updatedAt)}
+                      </p>
+                    </div>
+                    <StatusBadge status={db.status} className="shrink-0" />
+                  </Link>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+
+        {progressDb && (
+          <div className="lg:sticky lg:top-6">
+            <OperationLogPanel resourceType="database" resourceId={progressDb} />
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-muted-foreground">This panel shows the container provisioning progress live.</p>
+              <Button size="sm" variant="outline" onClick={() => navigate(`/databases/${progressDb}`)}>
+                Open database <ArrowRight className="size-3.5" />
+              </Button>
+            </div>
           </div>
-        </Card>
-      )}
+        )}
+      </div>
 
       <Modal
         isOpen={open}

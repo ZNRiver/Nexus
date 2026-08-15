@@ -6,6 +6,7 @@ import type { AppContext } from "../context";
 import { JobQueue } from "../jobs/queue";
 import { eventHub } from "../lib/events";
 import { nextRun, parseCron } from "../lib/cron";
+import { appendResourceLog } from "./resource-logs.service";
 
 export const DATABASE_IMAGES: Record<DatabaseType, { default: string; versions: string[]; internalPort: number; env: (user: string, pass: string, db: string) => Record<string, string>; volumePath: string }> = {
   POSTGRESQL: {
@@ -184,7 +185,7 @@ export class DatabasesService {
     };
     await this.db.run(
       `INSERT INTO databases (id, project_id, server_id, type, version, name, description, db_name, username, password_encrypted, port, internal_port, status, image, container_id, volume_name, storage_limit_bytes, max_connections, cpu_limit, memory_limit_bytes, backup_schedule_enabled, backup_schedule_cron, backup_retention, backup_next_run_at, backup_last_run_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [row.id, row.project_id, row.server_id, row.type, row.version, row.name, row.description, row.db_name, row.username, row.password_encrypted, row.port, row.internal_port, row.status, row.image, row.container_id, row.volume_name, row.storage_limit_bytes, row.max_connections, row.cpu_limit, row.memory_limit_bytes, row.backup_schedule_enabled, row.backup_schedule_cron, row.backup_retention, row.backup_next_run_at, row.backup_last_run_at, row.created_at, row.updated_at],
     );
     await this.db.run(
@@ -254,14 +255,17 @@ export class DatabasesService {
       throw Object.assign(new Error("Server is offline — database creation will retry"), { retryable: true });
     }
     try {
+      await appendResourceLog(this.db, "database", row.id, `Starting ${row.image} deployment…`);
       const containerId = await this.ensureContainer(row);
       await this.db.run(`UPDATE databases SET container_id = ?, status = 'RUNNING', updated_at = ? WHERE id = ?`, [
         containerId,
         new Date().toISOString(),
         row.id,
       ]);
+      await appendResourceLog(this.db, "database", row.id, "Deployment complete — database is running.", "system");
     } catch (err) {
       await this.db.run(`UPDATE databases SET status = 'FAILED', updated_at = ? WHERE id = ?`, [new Date().toISOString(), row.id]);
+      await appendResourceLog(this.db, "database", row.id, `Deployment failed: ${err instanceof Error ? err.message : String(err)}`, "stderr");
       throw err;
     }
     const updated = await this.getPublic(row.id);
@@ -283,14 +287,17 @@ export class DatabasesService {
     }
 
     try {
+      await appendResourceLog(this.db, "database", row.id, "Recreating container with current settings (volume preserved)…");
       const containerId = await this.ensureContainer(row);
       await this.db.run(`UPDATE databases SET container_id = ?, status = 'RUNNING', updated_at = ? WHERE id = ?`, [
         containerId,
         new Date().toISOString(),
         row.id,
       ]);
+      await appendResourceLog(this.db, "database", row.id, "Deploy complete — database is running.", "system");
     } catch (err) {
       await this.db.run(`UPDATE databases SET status = 'FAILED', updated_at = ? WHERE id = ?`, [new Date().toISOString(), row.id]);
+      await appendResourceLog(this.db, "database", row.id, `Deploy failed: ${err instanceof Error ? err.message : String(err)}`, "stderr");
       throw err;
     }
     const updated = await this.getPublic(row.id);
@@ -327,16 +334,29 @@ export class DatabasesService {
   /** Run a command inside the database container. */
   /* ── Console (run SQL / schema browser) ─────────────────────── */
 
+  /**
+   * Connection credentials used by the SQL console — always connect with
+   * superuser/root access so the panel can manage the whole database:
+   * - PostgreSQL: the container's POSTGRES_USER is the superuser (row.username).
+   * - MySQL/MariaDB: connect as `root` (password is MYSQL_ROOT_PASSWORD).
+   */
+  private dbCreds(row: DatabaseRow): { username: string; password?: string } {
+    const password = row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined;
+    const isRootless = row.type === "MYSQL" || row.type === "MARIADB";
+    return { username: isRootless ? "root" : (row.username ?? "root"), password };
+  }
+
   async query(id: string, sql: string): Promise<{ columns: string[]; rows: string[][]; truncated: boolean; message?: string }> {
     const row = await this.get(id);
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const creds = this.dbCreds(row);
     const result = await hub.request(row.server_id, "db.query", {
       type: row.type,
       containerId: row.container_id ?? "",
       name: row.db_name ?? row.name,
-      username: row.username,
-      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+      username: creds.username,
+      password: creds.password,
       sql,
     } as never, { timeoutMs: 60 * 1000 }) as { columns: string[]; rows: string[][]; truncated: boolean; message?: string };
     await this.ctx.audit({ action: "database.query", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { sql: sql.slice(0, 200) } });
@@ -347,12 +367,13 @@ export class DatabasesService {
     const row = await this.get(id);
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const creds = this.dbCreds(row);
     const result = await hub.request(row.server_id, "db.schema", {
       type: row.type,
       containerId: row.container_id ?? "",
       name: row.db_name ?? row.name,
-      username: row.username,
-      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+      username: creds.username,
+      password: creds.password,
     } as never, { timeoutMs: 60 * 1000 }) as { tables: { name: string; columns: { name: string; type: string }[] }[]; message?: string };
     await this.ctx.audit({ action: "database.schema.read", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id });
     return result;
@@ -374,12 +395,13 @@ export class DatabasesService {
     const row = await this.get(id);
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const creds = this.dbCreds(row);
     const result = await hub.request(row.server_id, "db.objects", {
       type: row.type,
       containerId: row.container_id ?? "",
       name: row.db_name ?? row.name,
-      username: row.username,
-      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+      username: creds.username,
+      password: creds.password,
     } as never, { timeoutMs: 60 * 1000 }) as {
       databases: string[];
       tables: { name: string; size?: string }[];
@@ -408,13 +430,14 @@ export class DatabasesService {
     const row = await this.get(id);
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    const creds = this.dbCreds(row);
     const result = await hub.request(row.server_id, "db.tableInfo", {
       type: row.type,
       containerId: row.container_id ?? "",
       name: row.db_name ?? row.name,
       table,
-      username: row.username,
-      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+      username: creds.username,
+      password: creds.password,
     } as never, { timeoutMs: 60 * 1000 }) as {
       columns: { name: string; type: string; nullable: boolean; key: string; defaultValue?: string | null }[];
       constraints: { name: string; type: string; definition?: string }[];
@@ -424,6 +447,67 @@ export class DatabasesService {
       message?: string;
     };
     await this.ctx.audit({ action: "database.tableinfo.read", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { table } });
+    return result;
+  }
+
+  /**
+   * Write operation (INSERT / UPDATE / DELETE) on a table, executed with
+   * superuser/root credentials — full phpMyAdmin-style editing.
+   */
+  async write(id: string, input: { table: string; operation: "insert" | "update" | "delete"; data: Record<string, string | number | null>; where?: Record<string, string | number | null> }): Promise<{ message: string; affected: number }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    if (!row.container_id) throw errors.conflict("Database container is not running");
+    const creds = this.dbCreds(row);
+    const result = await hub.request(row.server_id, "db.write", {
+      type: row.type,
+      containerId: row.container_id,
+      name: row.db_name ?? row.name,
+      table: input.table,
+      operation: input.operation,
+      data: input.data,
+      where: input.where,
+      username: creds.username,
+      password: creds.password,
+    } as never, { timeoutMs: 60 * 1000 }) as { message: string; affected: number };
+    await this.ctx.audit({
+      action: "database.write",
+      resourceType: "database",
+      resourceId: id,
+      resourceName: row.name,
+      serverId: row.server_id,
+      metadata: { table: input.table, operation: input.operation },
+    });
+    return result;
+  }
+
+  /**
+   * Run arbitrary SQL (DDL/DML) with superuser/root credentials — used by
+   * "Run SQL" in the panel (TRUNCATE, ALTER, CREATE, …).
+   */
+  async execSql(id: string, sql: string): Promise<{ message: string }> {
+    const row = await this.get(id);
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
+    if (!row.container_id) throw errors.conflict("Database container is not running");
+    const creds = this.dbCreds(row);
+    const result = await hub.request(row.server_id, "db.exec", {
+      type: row.type,
+      containerId: row.container_id,
+      name: row.db_name ?? row.name,
+      sql,
+      username: creds.username,
+      password: creds.password,
+    } as never, { timeoutMs: 60 * 1000 }) as { message: string };
+    await this.ctx.audit({
+      action: "database.exec-sql",
+      resourceType: "database",
+      resourceId: id,
+      resourceName: row.name,
+      serverId: row.server_id,
+      metadata: { sql: sql.slice(0, 200) },
+    });
     return result;
   }
 
@@ -551,14 +635,16 @@ export class DatabasesService {
 
     await this.db.run(`UPDATE backups SET status = 'RUNNING', started_at = ? WHERE id = ?`, [new Date().toISOString(), backup.id]);
     try {
+      await appendResourceLog(this.db, "backup", backup.id, `Starting backup of ${row.name} (${row.type})…`);
+      const creds = this.dbCreds(row);
       const result = await hub.request(row.server_id, "db.backup", {
         backupId: backup.id,
         databaseId: row.id,
         type: row.type,
         containerId: row.container_id ?? "",
         name: row.db_name ?? row.name,
-        username: row.username,
-        password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+        username: creds.username,
+        password: creds.password,
         port: row.port,
         internalPort: row.internal_port,
         destDir: "/opt/nexus/agent/backups",
@@ -568,6 +654,7 @@ export class DatabasesService {
         `UPDATE backups SET status = 'SUCCESS', path = ?, size_bytes = ?, finished_at = ? WHERE id = ?`,
         [result.path, result.sizeBytes, new Date().toISOString(), backup.id],
       );
+      await appendResourceLog(this.db, "backup", backup.id, `Backup complete (${Math.round(result.sizeBytes / 1024)} KB).`, "system");
       const owner = await this.db.get<{ id: string }>(`SELECT id FROM users ORDER BY created_at LIMIT 1`);
       if (owner) {
         const { NotificationsService } = await import("./notifications.service");
@@ -590,6 +677,7 @@ export class DatabasesService {
         new Date().toISOString(),
         backup.id,
       ]);
+      await appendResourceLog(this.db, "backup", backup.id, `Backup failed: ${err instanceof Error ? err.message : String(err)}`, "stderr");
       throw err;
     }
   }
@@ -603,18 +691,21 @@ export class DatabasesService {
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
 
+    const creds = this.dbCreds(row);
+    await appendResourceLog(this.db, "backup", backup.id, `Restoring ${row.name} from backup ${backupId.slice(-8)}…`);
     await hub.request(row.server_id, "db.restore", {
       backupId: backup.id,
       databaseId: row.id,
       type: row.type,
       containerId: row.container_id ?? "",
       name: row.db_name ?? row.name,
-      username: row.username,
-      password: row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : undefined,
+      username: creds.username,
+      password: creds.password,
       port: row.port,
       internalPort: row.internal_port,
       filePath: backup.path,
     } as never, { timeoutMs: 10 * 60 * 1000 });
+    await appendResourceLog(this.db, "backup", backup.id, "Restore complete.", "system");
 
     await this.ctx.audit({ action: "backup.restore", resourceType: "backup", resourceId: backupId, resourceName: row.name, serverId: row.server_id });
     await this.ctx.notify("backup.restored", "Backup restored", `${row.name} was restored from backup ${backupId.slice(-8)}.`);

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Check, Loader2, Boxes, Server as ServerIcon, GitBranch, FileCode2, Rocket, SlidersHorizontal, ListChecks } from "lucide-react";
 import { get, post } from "@/lib/api";
+import { OperationLogPanel } from "@/components/operation-log-panel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,8 @@ export function NewApplicationPage() {
   const { toast } = useToast();
   const [step, setStep] = useState(0);
   const [creating, setCreating] = useState(false);
+  // Created application id — shows live progress while it deploys.
+  const [progressApp, setProgressApp] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -107,8 +110,15 @@ export function NewApplicationPage() {
         environment: env.filter((r) => r.key.trim()).map((r) => ({ key: r.key.trim(), value: r.value, isSecret: r.isSecret })),
       };
       const res = await post<{ application: { id: string } }>("/applications", payload);
-      toast("success", "Application created", form.name);
-      navigate(`/applications/${res.application.id}`);
+      toast("success", "Application created", `${form.name} — provisioning…`);
+      setProgressApp(res.application.id);
+      setCreating(false);
+      // Kick off the first deploy so the progress panel has real work to show.
+      try {
+        await post<{ deploymentId: string }>(`/applications/${res.application.id}/deploy`, { branch: form.branch });
+      } catch {
+        /* deploy failure shows up in the panel */
+      }
     } catch (err) {
       toast("error", "Creation failed", err instanceof Error ? err.message : "Unknown error");
       setCreating(false);
@@ -340,45 +350,61 @@ export function NewApplicationPage() {
     <div className="p-6">
       <PageHeader title="New Application" description="Deploy a service from a Git repository to any server." />
 
-      {/* Stepper */}
-      <div className="mb-6 flex items-center gap-2">
-        {STEPS.map((s, i) => (
-          <div key={s.key} className="flex items-center gap-2">
-            <button
-              onClick={() => i < step && setStep(i)}
-              className={cn(
-                "flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors",
-                i === step ? "bg-primary text-primary-foreground" : i < step ? "text-primary hover:bg-primary/10" : "text-muted-foreground",
-              )}
-            >
-              <s.icon className="size-3.5" />
-              <span className="hidden sm:inline">{s.label}</span>
-            </button>
-            {i < STEPS.length - 1 && <div className="h-px w-6 bg-border" />}
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+        <div>
+          {/* Stepper */}
+          <div className="mb-6 flex items-center gap-2">
+            {STEPS.map((s, i) => (
+              <div key={s.key} className="flex items-center gap-2">
+                <button
+                  onClick={() => i < step && setStep(i)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors",
+                    i === step ? "bg-primary text-primary-foreground" : i < step ? "text-primary hover:bg-primary/10" : "text-muted-foreground",
+                  )}
+                >
+                  <s.icon className="size-3.5" />
+                  <span className="hidden sm:inline">{s.label}</span>
+                </button>
+                {i < STEPS.length - 1 && <div className="h-px w-6 bg-border" />}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      <Card className="max-w-2xl">
-        <CardContent className="p-6">
-          {steps[step]?.content}
-          <div className="mt-6 flex items-center justify-between border-t border-border/60 pt-4">
-            <Button variant="ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}>
-              <ArrowLeft className="size-4" /> Back
-            </Button>
-            {step < steps.length - 1 ? (
-              <Button onClick={() => setStep((s) => s + 1)} disabled={!canNext}>
-                Next <ArrowRight className="size-4" />
+          <Card className="max-w-2xl">
+            <CardContent className="p-6">
+              {steps[step]?.content}
+              <div className="mt-6 flex items-center justify-between border-t border-border/60 pt-4">
+                <Button variant="ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}>
+                  <ArrowLeft className="size-4" /> Back
+                </Button>
+                {step < steps.length - 1 ? (
+                  <Button onClick={() => setStep((s) => s + 1)} disabled={!canNext}>
+                    Next <ArrowRight className="size-4" />
+                  </Button>
+                ) : (
+                  <Button onClick={deploy} disabled={creating}>
+                    {creating ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
+                    Create Application
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {progressApp && (
+          <div className="lg:sticky lg:top-6">
+            <OperationLogPanel resourceType="application" resourceId={progressApp} />
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-muted-foreground">The first deploy runs automatically — this panel streams its progress.</p>
+              <Button size="sm" variant="outline" onClick={() => navigate(`/applications/${progressApp}`)}>
+                Open application <ArrowRight className="size-3.5" />
               </Button>
-            ) : (
-              <Button onClick={deploy} disabled={creating}>
-                {creating ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
-                Create Application
-              </Button>
-            )}
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </div>
     </div>
   );
 }

@@ -52,6 +52,8 @@ const ALLOWED_ACTIONS = new Set<AgentAction>([
   "db.schema",
   "db.objects",
   "db.tableInfo",
+  "db.write",
+  "db.exec",
   "volume.backup",
   "volume.restore",
   "file.remove",
@@ -61,6 +63,12 @@ const ALLOWED_ACTIONS = new Set<AgentAction>([
   "game.start",
   "game.stop",
   "game.remove",
+  "game.files.list",
+  "game.files.read",
+  "game.files.write",
+  "game.files.mkdir",
+  "game.files.delete",
+  "game.files.rename",
 ]);
 
 const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1 MB
@@ -252,18 +260,18 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
 
       case "database.create": {
         const { createDatabaseContainer } = await import("./databases/executor");
-        const result = await createDatabaseContainer(docker, payload as never, (msg) => emitEvent("database.status", String(payload.databaseId ?? ""), { message: msg }));
+        const result = await createDatabaseContainer(docker, payload as never, (msg) => emitEvent("resource.log", String(payload.databaseId ?? ""), { resourceType: "database", message: msg }));
         ctx.sendResult(requestId, result);
         return;
       }
 
       case "db.backup": {
-        const result = await createBackup(docker, payload as never, (msg) => emitEvent("job.progress", String(payload.databaseId ?? ""), { message: msg }));
+        const result = await createBackup(docker, payload as never, (msg) => emitEvent("resource.log", String(payload.backupId ?? ""), { resourceType: "backup", message: msg }));
         ctx.sendResult(requestId, result);
         return;
       }
       case "db.restore": {
-        const result = await restoreBackup(docker, payload as never, (msg) => emitEvent("job.progress", String(payload.databaseId ?? ""), { message: msg }));
+        const result = await restoreBackup(docker, payload as never, (msg) => emitEvent("resource.log", String(payload.backupId ?? ""), { resourceType: "backup", message: msg }));
         ctx.sendResult(requestId, result);
         return;
       }
@@ -292,14 +300,26 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
         ctx.sendResult(requestId, result);
         return;
       }
+      case "db.write": {
+        const { runDbWrite } = await import("./databases/console");
+        const result = await runDbWrite(docker, payload as never);
+        ctx.sendResult(requestId, result);
+        return;
+      }
+      case "db.exec": {
+        const { runDbExec } = await import("./databases/console");
+        const result = await runDbExec(docker, payload as never);
+        ctx.sendResult(requestId, result);
+        return;
+      }
 
       case "volume.backup": {
-        const result = await createVolumeBackup(docker, payload as never, (msg) => emitEvent("job.progress", String(payload.applicationId ?? ""), { message: msg }));
+        const result = await createVolumeBackup(docker, payload as never, (msg) => emitEvent("resource.log", String(payload.backupId ?? ""), { resourceType: "backup", message: msg }));
         ctx.sendResult(requestId, result);
         return;
       }
       case "volume.restore": {
-        const result = await restoreVolumeBackup(docker, payload as never, (msg) => emitEvent("job.progress", String(payload.applicationId ?? ""), { message: msg }));
+        const result = await restoreVolumeBackup(docker, payload as never, (msg) => emitEvent("resource.log", String(payload.backupId ?? ""), { resourceType: "backup", message: msg }));
         ctx.sendResult(requestId, result);
         return;
       }
@@ -386,6 +406,37 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
         const id = guard(String(payload.containerId ?? ""));
         await removeGame(docker, id);
         ctx.sendResult(requestId, { id });
+        return;
+      }
+
+      case "game.files.list": {
+        const { listGameFiles } = await import("./games/files");
+        ctx.sendResult(requestId, await listGameFiles(docker, payload as never));
+        return;
+      }
+      case "game.files.read": {
+        const { readGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await readGameFile(docker, payload as never));
+        return;
+      }
+      case "game.files.write": {
+        const { writeGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await writeGameFile(docker, payload as never));
+        return;
+      }
+      case "game.files.mkdir": {
+        const { mkdirGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await mkdirGameFile(docker, payload as never));
+        return;
+      }
+      case "game.files.delete": {
+        const { deleteGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await deleteGameFile(docker, payload as never));
+        return;
+      }
+      case "game.files.rename": {
+        const { renameGameFile } = await import("./games/files");
+        ctx.sendResult(requestId, await renameGameFile(docker, payload as never));
         return;
       }
 

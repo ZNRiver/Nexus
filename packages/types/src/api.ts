@@ -23,6 +23,7 @@ import type {
   NetworkInfo,
   Notification,
   Project,
+  ResourceLogEntry,
   Server,
   ServerStatus,
   ServerSystemInfo,
@@ -75,6 +76,7 @@ export type DashboardEvent =
   | { type: "server.metrics"; serverId: string; metrics: SystemMetrics }
   | { type: "deployment.status"; deployment: Deployment }
   | { type: "deployment.log"; deploymentId: string; entry: DeploymentLogEntry }
+  | { type: "resource.log"; resourceType: "database" | "application" | "backup"; resourceId: string; entry: ResourceLogEntry }
   | { type: "notification"; notification: Notification }
   | { type: "container.status"; serverId: string; container: ContainerInfo }
   | { type: "database.status"; database: Database }

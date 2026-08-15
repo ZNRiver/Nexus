@@ -51,6 +51,7 @@ export type AgentEventType =
   | "deployment.status"
   | "container.status"
   | "job.progress"
+  | "resource.log"
   | "database.status"
   | "game.status";
 
@@ -104,6 +105,8 @@ export type AgentAction =
   | "db.schema"
   | "db.objects"
   | "db.tableInfo"
+  | "db.write"
+  | "db.exec"
   | "volume.backup"
   | "volume.restore"
   | "file.remove"
@@ -112,7 +115,13 @@ export type AgentAction =
   | "game.create"
   | "game.start"
   | "game.stop"
-  | "game.remove";
+  | "game.remove"
+  | "game.files.list"
+  | "game.files.read"
+  | "game.files.write"
+  | "game.files.mkdir"
+  | "game.files.delete"
+  | "game.files.rename";
 
 export interface ApiAgentRequest {
   type: "request";
@@ -231,6 +240,29 @@ export interface DbTableInfoPayload {
   password?: string;
 }
 
+export interface DbWritePayload {
+  type: string;
+  containerId: string;
+  name: string;
+  table: string;
+  operation: "insert" | "update" | "delete";
+  /** column → value (string, number or null) for insert/update/where */
+  data: Record<string, string | number | null>;
+  /** column → value used in the WHERE clause (update/delete) */
+  where?: Record<string, string | number | null>;
+  username?: string;
+  password?: string;
+}
+
+export interface DbExecPayload {
+  type: string;
+  containerId: string;
+  name: string;
+  sql: string;
+  username?: string;
+  password?: string;
+}
+
 export interface DbRestorePayload {
   backupId: string;
   databaseId: string;
@@ -283,6 +315,40 @@ export interface GameCreatePayload {
   volumeName: string;
   restartPolicy: string;
   labels: Record<string, string>;
+}
+
+export interface GameFileListPayload {
+  containerId: string;
+  /** absolute path inside the container (rooted at the game volume /data) */
+  path: string;
+}
+
+export interface GameFileReadPayload {
+  containerId: string;
+  path: string;
+}
+
+export interface GameFileWritePayload {
+  containerId: string;
+  path: string;
+  content: string;
+}
+
+export interface GameFileMkdirPayload {
+  containerId: string;
+  path: string;
+}
+
+export interface GameFileDeletePayload {
+  containerId: string;
+  path: string;
+  recursive?: boolean;
+}
+
+export interface GameFileRenamePayload {
+  containerId: string;
+  path: string;
+  newName: string;
 }
 
 /* ── Registry of typed results for each action ───────────────────── */
@@ -338,7 +404,9 @@ export interface AgentActionResultMap {
     indexes: { name: string; columns: string; unique: boolean }[];
     message?: string;
   };
-  "volume.backup": { path: string; sizeBytes: number };
+  "db.write": { message: string; affected: number };
+  "db.exec": { message: string };
+  "volume.backup": { path: string; sizeBytes: number; sha1?: string };
   "volume.restore": { restored: boolean };
   "file.remove": { removed: boolean };
   "file.read": { data: string; offset: number; length: number; total: number };
@@ -347,4 +415,13 @@ export interface AgentActionResultMap {
   "game.start": { id: string };
   "game.stop": { id: string };
   "game.remove": { id: string };
+  "game.files.list": {
+    path: string;
+    entries: { name: string; type: "dir" | "file"; size: number; mtime: number }[];
+  };
+  "game.files.read": { path: string; content: string; bytes: number };
+  "game.files.write": { path: string; bytes: number };
+  "game.files.mkdir": { path: string };
+  "game.files.delete": { path: string };
+  "game.files.rename": { from: string; to: string };
 }

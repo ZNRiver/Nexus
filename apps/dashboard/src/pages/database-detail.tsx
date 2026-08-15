@@ -7,6 +7,7 @@ import {
   HardDrive as HardDriveIcon, Cpu as CpuIcon, MemoryStick as MemoryIcon, CalendarClock, Save, Download, Upload, UploadCloud,
   SquareTerminal, Table2, PlayCircle, Clock3, Database as DatabaseIcon, FolderTree, ChevronRight, ChevronDown,
   Filter, Columns3, Link2, Zap, ListTree, Search, Server, Users, Info, Wrench,
+  Hash, Type as TypeIcon, Braces, ClipboardList, Network, Plus, Check, X, Eraser, Pencil,
 } from "lucide-react";
 import { get, post, put, del, downloadBackup } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +20,7 @@ import { Skeleton } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
 import { formatBytes, formatTime, timeAgo } from "@/lib/format";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
+import { OperationLogPanel } from "@/components/operation-log-panel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/Switch";
@@ -46,10 +48,13 @@ export function DatabaseDetailPage() {
 
   const [tab, setTab] = useState<TabKey>("general");
   const [revealed, setRevealed] = useState<DatabaseConnectionInfo | null>(null);
-  const [secretsVisible, setSecretsVisible] = useState(false);
+  // Which secret fields are currently revealed — each eye toggles only its own field.
+  const [revealedFields, setRevealedFields] = useState<Set<string>>(() => new Set());
   const [revealing, setRevealing] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [backingUp, setBackingUp] = useState(false);
+  // Live progress for the currently running backup.
+  const [progressBackup, setProgressBackup] = useState<string | null>(null);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleCron, setScheduleCron] = useState("0 2 * * *");
   const [scheduleRetention, setScheduleRetention] = useState(7);
@@ -121,12 +126,13 @@ export function DatabaseDetailPage() {
     }
   };
 
+  // Fetches the decrypted connection info once. Which fields get shown is
+  // decided by each caller via `revealedFields` — reveal() itself never touches it.
   const reveal = async () => {
     setRevealing(true);
     try {
       const info = await post<DatabaseConnectionInfo>(`/databases/${id}/connection/reveal`);
       setRevealed(info);
-      setSecretsVisible(true);
     } catch (err) {
       toast("error", "Reveal failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -134,21 +140,24 @@ export function DatabaseDetailPage() {
     }
   };
 
-  const toggleSecret = () => {
-    if (secretsVisible) {
-      setSecretsVisible(false);
-    } else if (revealed) {
-      setSecretsVisible(true);
-    } else {
-      void reveal();
-    }
+  const toggleSecret = (field: "password" | "rootPassword" | "uri") => {
+    setRevealedFields((prev) => {
+      const next = new Set(prev);
+      if (next.has(field)) {
+        next.delete(field);
+      } else {
+        next.add(field);
+      }
+      return next;
+    });
   };
 
   const backup = async () => {
     setBackingUp(true);
     try {
-      await post(`/databases/${id}/backup`);
+      const res = await post<{ backup: { id: string } }>(`/databases/${id}/backup`);
       toast("success", "Backup started", "The agent is snapshotting the database");
+      setProgressBackup(res.backup.id);
       queryClient.invalidateQueries({ queryKey: ["database-detail", id] });
     } catch (err) {
       toast("error", "Backup failed", err instanceof Error ? err.message : "Unknown error");
@@ -260,12 +269,15 @@ export function DatabaseDetailPage() {
 
   const { database: db, connection, backups } = data;
   const conn = revealed ?? connection;
-  const passwordShown = !!(revealed && secretsVisible);
+  const passwordShown = !!(revealed && revealedFields.has("password"));
+  const rootPasswordShown = !!(revealed && revealedFields.has("rootPassword"));
+  const uriShown = !!(revealed && revealedFields.has("uri"));
   const canRun = db.status === "RUNNING";
   const busy = actionBusy !== null;
 
   const passwordDisplay = passwordShown ? revealed!.password : connection?.password ?? "••••••••";
-  const uriDisplay = passwordShown ? revealed!.uri : connection?.uri ?? "••••••••••••••••••••";
+  const rootPasswordDisplay = rootPasswordShown ? revealed!.password : connection?.password ?? "••••••••";
+  const uriDisplay = uriShown ? revealed!.uri : connection?.uri ?? "••••••••••••••••••••";
 
   const stats = statsQ.data;
   const statsError = statsQ.error ? (statsQ.error as Error).message : null;
@@ -331,7 +343,15 @@ export function DatabaseDetailPage() {
                   <KeyRound className="size-4 text-muted-foreground" /> Internal Credentials
                 </CardTitle>
                 {!revealed && (
-                  <Button size="sm" variant="outline" onClick={reveal} disabled={revealing}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setRevealedFields(new Set(["password", "rootPassword", "uri"]));
+                      void reveal();
+                    }}
+                    disabled={revealing}
+                  >
                     {revealing ? <Loader2 className="size-3.5 animate-spin" /> : <Eye className="size-3.5" />} Reveal credentials
                   </Button>
                 )}
@@ -351,7 +371,10 @@ export function DatabaseDetailPage() {
                       value={passwordDisplay}
                       secret
                       shown={passwordShown}
-                      onToggle={toggleSecret}
+                      onToggle={() => {
+                        toggleSecret("password");
+                        if (!revealed) void reveal();
+                      }}
                       onCopy={() => copy(revealed?.password ?? connection?.password ?? "")}
                     />
                     <SecretField label="Internal Port (Container)" value={String(db.internalPort)} onCopy={() => copy(String(db.internalPort))} />
@@ -360,8 +383,11 @@ export function DatabaseDetailPage() {
                       value={uriDisplay}
                       secret
                       mono
-                      shown={passwordShown}
-                      onToggle={toggleSecret}
+                      shown={uriShown}
+                      onToggle={() => {
+                        toggleSecret("uri");
+                        if (!revealed) void reveal();
+                      }}
                       onCopy={() => copy(revealed?.uri ?? connection?.uri ?? "")}
                     />
                   </div>
@@ -370,10 +396,13 @@ export function DatabaseDetailPage() {
                     <SecretField label="Database Name" value={conn?.database ?? db.dbName ?? db.name} onCopy={() => copy(conn?.database ?? db.dbName ?? db.name)} />
                     <SecretField
                       label="Root Password"
-                      value={passwordDisplay}
+                      value={rootPasswordDisplay}
                       secret
-                      shown={passwordShown}
-                      onToggle={toggleSecret}
+                      shown={rootPasswordShown}
+                      onToggle={() => {
+                        toggleSecret("rootPassword");
+                        if (!revealed) void reveal();
+                      }}
                       onCopy={() => copy(revealed?.password ?? connection?.password ?? "")}
                     />
                     <SecretField label="Internal Host" value={containerName} mono onCopy={() => copy(containerName)} />
@@ -560,6 +589,16 @@ export function DatabaseDetailPage() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-1">
+                {progressBackup && (
+                  <div className="mb-3">
+                    <OperationLogPanel
+                      resourceType="backup"
+                      resourceId={progressBackup}
+                      title="Backup Progress"
+                      subtitle="Snapshot in progress — live from the agent."
+                    />
+                  </div>
+                )}
                 {backups.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No backups yet — create one to snapshot the database.</p>}
                 {backups.map((b) => (
                   <div key={b.id} className="flex items-center justify-between rounded-xl px-3 py-2.5 row-hover">
@@ -859,7 +898,11 @@ function colKind(type: string): "num" | "str" | "other" {
   return "other";
 }
 
-const colKindIcon: Record<string, string> = { num: "123", str: "A-Z", other: "💾" };
+const colKindIcon: Record<string, React.ComponentType<{ className?: string }>> = {
+  num: Hash,
+  str: TypeIcon,
+  other: Braces,
+};
 
 function DbBrowser({ db }: { db: Database }) {
   const { toast } = useToast();
@@ -944,6 +987,156 @@ function DbBrowser({ db }: { db: Database }) {
   const runFilter = () => {
     if (!selectedTable) return;
     void loadRows(selectedTable, filter);
+  };
+
+  /* ── data editing (phpMyAdmin-style) ─────────────────────── */
+  const [edit, setEdit] = useState<{ row: number; col: string; value: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const cancelEditRef = useRef(false);
+  const [insertOpen, setInsertOpen] = useState(false);
+  const [insertForm, setInsertForm] = useState<Record<string, string>>({});
+  const [insertBusy, setInsertBusy] = useState(false);
+  const [sqlOpen, setSqlOpen] = useState(false);
+  const [sqlText, setSqlText] = useState("");
+  const [sqlBusy, setSqlBusy] = useState(false);
+  const [sqlMsg, setSqlMsg] = useState<string | null>(null);
+  const [truncateOpen, setTruncateOpen] = useState(false);
+  const [dropOpen, setDropOpen] = useState(false);
+  const [mutBusy, setMutBusy] = useState(false);
+
+  /** WHERE built from every column of a row (NULL cells match via IS NULL). */
+  const rowWhere = (rowIdx: number): Record<string, string | number | null> => {
+    if (!rows) return {};
+    const where: Record<string, string | number | null> = {};
+    rows.columns.forEach((c, j) => {
+      where[c] = rows.rows[rowIdx][j] ?? "";
+    });
+    return where;
+  };
+
+  const saveCell = async () => {
+    if (savingRef.current) return; // Enter + blur fire in quick succession
+    if (cancelEditRef.current) {
+      cancelEditRef.current = false;
+      return;
+    }
+    if (!edit || !rows || !selectedTable) return;
+    const { row, col, value } = edit;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await post(`/databases/${id}/write`, {
+        table: selectedTable,
+        operation: "update",
+        data: { [col]: value },
+        where: rowWhere(row),
+      });
+      toast("success", "Cell updated", `${selectedTable}.${col}`);
+      void loadRows(selectedTable, filter);
+    } catch (err) {
+      toast("error", "Update failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+      setEdit(null);
+    }
+  };
+
+  const deleteRow = async (rowIdx: number) => {
+    if (!rows || !selectedTable) return;
+    if (!window.confirm(`Delete this row from ${selectedTable}?\n\nThis cannot be undone.`)) return;
+    try {
+      const res = await post<{ message: string; affected: number }>(`/databases/${id}/write`, {
+        table: selectedTable,
+        operation: "delete",
+        where: rowWhere(rowIdx),
+      });
+      toast("success", "Row deleted", res.message);
+      void loadRows(selectedTable, filter);
+    } catch (err) {
+      toast("error", "Delete failed", err instanceof Error ? err.message : "Unknown error");
+    }
+  };
+
+  const openInsert = () => {
+    const form: Record<string, string> = {};
+    (tableInfo?.columns ?? []).forEach((c) => {
+      form[c.name] = "";
+    });
+    setInsertForm(form);
+    setInsertOpen(true);
+  };
+
+  const submitInsert = async () => {
+    if (!selectedTable) return;
+    setInsertBusy(true);
+    try {
+      const data: Record<string, string | number | null> = {};
+      Object.entries(insertForm).forEach(([k, v]) => {
+        data[k] = v;
+      });
+      const res = await post<{ message: string; affected: number }>(`/databases/${id}/write`, {
+        table: selectedTable,
+        operation: "insert",
+        data,
+      });
+      toast("success", "Row inserted", res.message);
+      setInsertOpen(false);
+      void loadRows(selectedTable, filter);
+    } catch (err) {
+      toast("error", "Insert failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setInsertBusy(false);
+    }
+  };
+
+  const runSql = async () => {
+    if (!sqlText.trim()) return;
+    setSqlBusy(true);
+    setSqlMsg(null);
+    try {
+      const res = await post<{ message: string }>(`/databases/${id}/exec-sql`, { sql: sqlText });
+      setSqlMsg(res.message);
+      toast("success", "SQL executed", res.message);
+      void loadObjects();
+    } catch (err) {
+      setSqlMsg(err instanceof Error ? err.message : "SQL failed");
+    } finally {
+      setSqlBusy(false);
+    }
+  };
+
+  const truncateTable = async () => {
+    if (!selectedTable) return;
+    setMutBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `TRUNCATE TABLE ${quote(selectedTable)}` });
+      toast("success", "Table truncated", selectedTable);
+      setTruncateOpen(false);
+      void loadRows(selectedTable, "");
+    } catch (err) {
+      toast("error", "Truncate failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setMutBusy(false);
+    }
+  };
+
+  const dropTable = async () => {
+    if (!selectedTable) return;
+    setMutBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `DROP TABLE ${quote(selectedTable)}` });
+      toast("success", "Table dropped", selectedTable);
+      setDropOpen(false);
+      setSelectedTable(null);
+      setRows(null);
+      void loadObjects();
+    } catch (err) {
+      toast("error", "Drop failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setMutBusy(false);
+    }
   };
 
   const currentDb = objects?.databases?.find((d) => d === (db.dbName ?? db.name)) ?? objects?.databases?.[0] ?? "";
@@ -1034,7 +1227,10 @@ function DbBrowser({ db }: { db: Database }) {
             <DatabaseIcon className="size-4 text-primary" />
             <div className="min-w-0">
               <p className="truncate text-[12px] font-semibold">selected DB: <span className="font-mono text-primary">{currentDb || "—"}</span></p>
-              <p className="text-[11px] text-muted-foreground">{objects?.version ? `🐘 ${objects.version}` : db.type}</p>
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <DbLogo type={db.type} className={cn("size-3.5", DB_COLORS[db.type])} />
+                {objects?.version ?? db.type}
+              </p>
             </div>
           </div>
           <Button size="sm" variant="ghost" className="absolute right-3 top-3" onClick={() => void loadObjects()} disabled={loading} title="Reload objects">
@@ -1118,9 +1314,9 @@ function DbBrowser({ db }: { db: Database }) {
         {/* View tabs */}
         <div className="flex items-center gap-1 overflow-x-auto border-b border-border/60 scrollbar-hide">
           {[
-            { key: "data" as const, label: "💾 Dados", icon: Table2 },
-            { key: "properties" as const, label: "📋 Propriedades", icon: Columns3 },
-            { key: "diagram" as const, label: "📐 Diagrama", icon: Link2 },
+            { key: "data" as const, label: "Dados", icon: Table2 },
+            { key: "properties" as const, label: "Propriedades", icon: ClipboardList },
+            { key: "diagram" as const, label: "Diagrama", icon: Network },
           ].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -1236,24 +1432,41 @@ function DbBrowser({ db }: { db: Database }) {
 
             {/* Data grid */}
             <Card>
-              <CardHeader className="flex-row items-center justify-between">
+              <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
                 <CardTitle className="flex items-center gap-2 text-sm">
                   <Table2 className="size-4 text-muted-foreground" /> <span className="font-mono">{selectedTable}</span>
                 </CardTitle>
-                {rowsLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+                <div className="flex items-center gap-1.5">
+                  {rowsLoading && <Loader2 className="mr-1 size-4 animate-spin text-muted-foreground" />}
+                  <Button size="sm" variant="outline" onClick={() => void openInsert()}>
+                    <Plus className="size-3.5" /> Insert row
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => { setSqlMsg(null); setSqlText(""); setSqlOpen(true); }}>
+                    <Terminal className="size-3.5" /> Run SQL
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setTruncateOpen(true)} className="text-amber-500">
+                    <Eraser className="size-3.5" /> Truncate
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setDropOpen(true)} className="text-destructive">
+                    <Trash2 className="size-3.5" /> Drop
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 {rows && rows.columns.length > 0 ? (
                   <div className="max-h-[420px] overflow-auto rounded-xl border border-border/60">
                     <table className="w-full border-collapse text-[12px]">
-                      <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+                      <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                         <tr>
-                          <th className="border-b border-border/60 px-3 py-2 text-left font-medium">#</th>
+                          <th className="w-12 border-b border-border/60 px-2 py-2 text-left font-medium">#</th>
                           {rows.columns.map((c) => {
                             const kind = colKind(colTypeOf(c));
+                            const KindIcon = colKindIcon[kind];
                             return (
                               <th key={c} className="border-b border-border/60 px-3 py-2 text-left font-medium">
-                                <span className="mr-1.5 text-[10px] text-muted-foreground">{colKindIcon[kind]}</span>
+                                <span className="mr-1.5 inline-flex align-[-2px] text-muted-foreground" title={kind === "num" ? "numeric" : kind === "str" ? "text" : "other"}>
+                                  <KindIcon className="size-3" />
+                                </span>
                                 {c}
                               </th>
                             );
@@ -1262,13 +1475,55 @@ function DbBrowser({ db }: { db: Database }) {
                       </thead>
                       <tbody>
                         {rows.rows.map((row, i) => (
-                          <tr key={i} className="hover:bg-muted/40">
-                            <td className="border-b border-border/30 px-3 py-1.5 text-muted-foreground tabular-nums">{i + 1}</td>
-                            {row.map((cell, j) => (
-                              <td key={j} className="max-w-[280px] truncate border-b border-border/30 px-3 py-1.5 font-mono">
-                                {cell === "" ? <span className="text-muted-foreground/60">[NULL]</span> : cell}
-                              </td>
-                            ))}
+                          <tr key={i} className="group hover:bg-muted/40">
+                            <td className="border-b border-border/30 px-2 py-1.5">
+                              <div className="flex items-center gap-1">
+                                <span className="text-muted-foreground tabular-nums">{i + 1}</span>
+                                <button
+                                  onClick={() => void deleteRow(i)}
+                                  title="Delete row"
+                                  className="rounded p-1 text-muted-foreground/50 opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                            {row.map((cell, j) => {
+                              const colName = rows.columns[j];
+                              const isEditing = edit?.row === i && edit.col === colName;
+                              return (
+                                <td key={j} className="max-w-[280px] border-b border-border/30 px-3 py-1 font-mono">
+                                  {isEditing ? (
+                                    <input
+                                      autoFocus
+                                      value={edit.value}
+                                      onChange={(e) => setEdit({ row: i, col: colName, value: e.target.value })}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") void saveCell();
+                                        if (e.key === "Escape") {
+                                          cancelEditRef.current = true;
+                                          setEdit(null);
+                                        }
+                                      }}
+                                      onBlur={() => void saveCell()}
+                                      spellCheck={false}
+                                      className="h-7 w-full min-w-[120px] rounded-md border border-primary/50 bg-background px-2 text-[12px] focus:outline-none"
+                                    />
+                                  ) : (
+                                    <button
+                                      onClick={() => setEdit({ row: i, col: colName, value: cell })}
+                                      title="Click to edit"
+                                      className={cn(
+                                        "block w-full truncate rounded px-1 py-0.5 text-left transition-colors hover:bg-primary/10",
+                                        cell === "" ? "italic text-muted-foreground/60" : "",
+                                      )}
+                                    >
+                                      {cell === "" ? "[NULL]" : cell}
+                                    </button>
+                                  )}
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                         {rows.rows.length === 0 && (
@@ -1433,6 +1688,99 @@ function DbBrowser({ db }: { db: Database }) {
           </>
         )}
       </div>
+
+      {/* Insert row modal */}
+      <Modal isOpen={insertOpen} onClose={() => !insertBusy && setInsertOpen(false)} maxWidth="560px" showCloseButton={!insertBusy}>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold text-foreground">
+            Insert row into <span className="font-mono text-primary">{selectedTable}</span>
+          </h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">Leave a field blank to use the column default (auto-increment / NULL).</p>
+          <div className="mt-4 grid max-h-[60vh] grid-cols-2 gap-3 overflow-auto pr-1">
+            {(tableInfo?.columns ?? []).map((c) => (
+              <div key={c.name}>
+                <label className="mb-1 block text-[11.5px] font-medium text-muted-foreground">
+                  <span className="font-mono">{c.name}</span> <span className="text-[10.5px] opacity-70">({c.type})</span>
+                </label>
+                <Input
+                  value={insertForm[c.name] ?? ""}
+                  onChange={(e) => setInsertForm((f) => ({ ...f, [c.name]: e.target.value }))}
+                  placeholder={c.nullable ? "NULL" : "required"}
+                  className="h-9 font-mono text-[12.5px]"
+                />
+              </div>
+            ))}
+            {(tableInfo?.columns ?? []).length === 0 && <p className="col-span-2 py-6 text-center text-sm text-muted-foreground">No columns available.</p>}
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setInsertOpen(false)} disabled={insertBusy}>
+              Cancel
+            </Button>
+            <Button onClick={() => void submitInsert()} disabled={insertBusy}>
+              {insertBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Insert
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Run SQL modal */}
+      <Modal isOpen={sqlOpen} onClose={() => setSqlOpen(false)} maxWidth="640px" showCloseButton>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold text-foreground">
+            Run SQL on <span className="font-mono text-primary">{db.dbName ?? db.name}</span>
+          </h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">Execute DDL/DML with root access — ALTER, CREATE, TRUNCATE, GRANT…</p>
+          <textarea
+            value={sqlText}
+            onChange={(e) => setSqlText(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void runSql();
+            }}
+            spellCheck={false}
+            placeholder="e.g. ALTER TABLE books ADD COLUMN isbn text;"
+            className="mt-4 h-40 w-full resize-y rounded-xl border border-border/60 bg-background p-3 font-mono text-[12.5px] text-foreground placeholder:text-muted-foreground/50 focus:border-primary/50 focus:outline-none"
+          />
+          {sqlMsg && (
+            <pre
+              className={cn(
+                "mt-3 max-h-32 overflow-auto whitespace-pre-wrap rounded-xl border p-3 font-mono text-[12px]",
+                /error/i.test(sqlMsg) ? "border-destructive/40 text-destructive" : "border-border/60 text-muted-foreground",
+              )}
+            >
+              {sqlMsg}
+            </pre>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setSqlOpen(false)} disabled={sqlBusy}>
+              Close
+            </Button>
+            <Button onClick={() => void runSql()} disabled={sqlBusy || !sqlText.trim()}>
+              {sqlBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />} Run (Ctrl+Enter)
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={truncateOpen}
+        onClose={() => setTruncateOpen(false)}
+        onConfirm={() => void truncateTable()}
+        title="Truncate table"
+        description="This removes ALL rows from the table. The table structure is kept."
+        resourceName={selectedTable ?? ""}
+        confirmLabel="Truncate"
+        loading={mutBusy}
+      />
+      <ConfirmDialog
+        open={dropOpen}
+        onClose={() => setDropOpen(false)}
+        onConfirm={() => void dropTable()}
+        title="Drop table"
+        description="This permanently deletes the table and all its data."
+        resourceName={selectedTable ?? ""}
+        confirmLabel="Drop"
+        loading={mutBusy}
+      />
     </div>
   );
 }

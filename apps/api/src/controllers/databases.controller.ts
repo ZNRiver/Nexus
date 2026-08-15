@@ -127,6 +127,29 @@ export function registerDatabaseRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...result });
   });
 
+  const dbWriteSchema = z.object({
+    table: z.string().min(1),
+    operation: z.enum(["insert", "update", "delete"]),
+    data: z.record(z.string(), z.union([z.string(), z.number(), z.null()])).optional().default({}),
+    where: z.record(z.string(), z.union([z.string(), z.number(), z.null()])).optional(),
+  });
+
+  app.post("/api/v1/databases/:id/write", requireAuth, requirePermission("database.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = dbWriteSchema.safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await dbs.write(pid(c), parsed.data);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/databases/:id/exec-sql", requireAuth, requirePermission("database.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const sql = typeof body.sql === "string" ? body.sql.trim() : "";
+    if (!sql) throw errors.validation({ sql: "sql is required" });
+    const result = await dbs.execSql(pid(c), sql);
+    return c.json({ success: true, ...result });
+  });
+
   /* ── runtime info ───────────────────────────────────────────── */
 
   app.get("/api/v1/databases/:id/logs", requireAuth, requirePermission("database.read"), async (c) => {
@@ -179,8 +202,11 @@ export function registerDatabaseRoutes(app: App, ctx: AppContext): void {
 
   app.post("/api/v1/backups/:id/restore", requireAuth, requirePermission("backup.restore"), async (c) => {
     const backupId = pid(c);
-    const row = await ctx.db.get<{ application_id: string | null }>(`SELECT application_id FROM backups WHERE id = ?`, [backupId]);
-    if (row?.application_id) {
+    const row = await ctx.db.get<{ application_id: string | null; game_server_id: string | null }>(`SELECT application_id, game_server_id FROM backups WHERE id = ?`, [backupId]);
+    if (row?.game_server_id) {
+      const { GameServersService } = await import("../services/games.service");
+      await new GameServersService(ctx.db, ctx).restoreBackup(backupId);
+    } else if (row?.application_id) {
       const { ApplicationsService } = await import("../services/applications.service");
       await new ApplicationsService(ctx.db, ctx).restoreBackup(backupId);
     } else {

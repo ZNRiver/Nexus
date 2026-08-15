@@ -5,6 +5,7 @@ import type { ApplicationWithExtras, Deployment, DeploymentLogEntry, DeploymentS
 import { eventHub } from "../lib/events";
 import type { AppContext } from "../context";
 import { SettingsService } from "./settings.service";
+import { appendResourceLog } from "./resource-logs.service";
 
 export function toDeployment(row: DeploymentRow): Deployment {
   return {
@@ -117,13 +118,15 @@ export class DeploymentsService {
     }
     const server = await this.db.get<ServerRow>(`SELECT * FROM servers WHERE id = ?`, [dep.server_id]);
 
-    // Log helper (persisted + streamed via hub events).
+    // Log helper (persisted + streamed via hub events). Also mirrored into
+    // resource_logs so the application progress panel can show the same lines.
     const log = async (message: string, stream: "stdout" | "stderr" | "system" = "stdout") => {
       await this.db.run(
         `INSERT INTO deployment_logs (id, deployment_id, stream, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
         [`dlog_${Math.random().toString(36).slice(2, 14)}`, dep.id, stream, message, new Date().toISOString()],
       );
       eventHub.emit({ type: "deployment.log", deploymentId: dep.id, entry: { stream, message, timestamp: new Date().toISOString() } });
+      await appendResourceLog(this.db, "application", payload.applicationId, message, stream);
     };
 
     await this.db.run(`UPDATE application_deployments SET status = 'CLONING', started_at = COALESCE(started_at, ?) WHERE id = ?`, [new Date().toISOString(), dep.id]);

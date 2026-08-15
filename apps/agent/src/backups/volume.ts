@@ -17,7 +17,7 @@ export async function createVolumeBackup(
   docker: DockerService,
   payload: VolumeBackupPayload,
   onLog?: (msg: string) => void,
-): Promise<{ path: string; sizeBytes: number }> {
+): Promise<{ path: string; sizeBytes: number; sha1?: string }> {
   const logLine = onLog ?? (() => {});
   const filePath = join(BACKUP_DIR, payload.fileName);
   mkdirSync(BACKUP_DIR, { recursive: true });
@@ -38,8 +38,19 @@ export async function createVolumeBackup(
     throw new Error(`volume backup failed: ${res.stderr.trim() || res.stdout.trim()}`);
   }
   const size = existsSync(filePath) ? statSync(filePath).size : 0;
+  // SHA-1 of the tar.gz — used to verify the backup after download/restore.
+  let sha1: string | undefined;
+  try {
+    const { createHash } = await import("node:crypto");
+    const hash = createHash("sha1");
+    const buf = await Bun.file(filePath).arrayBuffer();
+    hash.update(Buffer.from(buf));
+    sha1 = hash.digest("hex");
+  } catch {
+    sha1 = undefined;
+  }
   logLine(`Volume backup complete (${size} bytes)`);
-  return { path: filePath, sizeBytes: size };
+  return { path: filePath, sizeBytes: size, sha1 };
 }
 
 /**

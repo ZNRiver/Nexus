@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { Ref } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -141,9 +140,15 @@ export function ApplicationDetailPage() {
     refetchInterval: latestDeployment && ["QUEUED", "CLONING", "BUILDING", "PUSHING", "DEPLOYING", "STARTING", "HEALTH_CHECK", "WAITING_FOR_SERVER"].includes(latestDeployment.status) ? 3000 : false,
   });
 
+  // Always jump to the newest logs (bottom) when the Logs tab opens, and follow
+  // new lines as they arrive. Deps include `tab` so re-entering the tab (cached
+  // data, same length) still scrolls down instead of leaving the view at the top.
   useEffect(() => {
-    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
-  }, [depLogs?.logs.length, liveLogs?.logs.length]);
+    if (tab !== "logs") return;
+    const el = logsRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [tab, depLogs?.logs.length, liveLogs?.logs.length]);
 
   // Real-time updates.
   useEffect(() => {
@@ -282,11 +287,12 @@ export function ApplicationDetailPage() {
     }
   };
 
-  /** Build the editor text (KEY=VALUE per line, secrets masked) from the API list. */
-  const buildEnvText = (envs: EnvironmentVariable[], reveal: Record<string, string>): string =>
+  /** Build the editor text (KEY=VALUE per line, values masked) from the API list. */
+  const buildEnvText = (envs: EnvironmentVariable[], reveal: Record<string, string>, mask: boolean): string =>
     envs
       .map((e) => {
-        const value = e.isSecret && envMasked && !reveal[e.id] ? "••••••••••••" : (reveal[e.id] ?? e.valueMasked);
+        // When masked, show dots for every line (regardless of per-line reveal).
+        const value = mask ? "••••••••••••" : (reveal[e.id] ?? e.valueMasked);
         return `${e.key}=${value}`;
       })
       .join("\n");
@@ -294,7 +300,7 @@ export function ApplicationDetailPage() {
   // Initialize the editor once the env list arrives.
   useEffect(() => {
     if (data?.environment && !envInit) {
-      setEnvText(buildEnvText(data.environment, revealedEnv));
+      setEnvText(buildEnvText(data.environment, revealedEnv, true));
       setEnvSecretKeys(Object.fromEntries(data.environment.map((e) => [e.key, e.isSecret])));
       setEnvInit(true);
     }
@@ -306,7 +312,7 @@ export function ApplicationDetailPage() {
       setRevealedEnv((r) => {
         const next = { ...r, [env.id]: res.value };
         // Refresh the editor with the real value for this line.
-        setEnvText(buildEnvText(data?.environment ?? [], next));
+        setEnvText(buildEnvText(data?.environment ?? [], next, false));
         return next;
       });
     } catch (err) {
@@ -316,11 +322,12 @@ export function ApplicationDetailPage() {
 
   const toggleEnvMasked = async () => {
     if (envMasked && data?.environment) {
-      await Promise.all(data.environment.filter((e) => e.isSecret && !revealedEnv[e.id]).map((e) => revealEnv(e).catch(() => {})));
+      // Reveal ALL variables (secret or not) with a single click.
+      await Promise.all(data.environment.filter((e) => !revealedEnv[e.id]).map((e) => revealEnv(e).catch(() => {})));
       setEnvMasked(false);
     } else {
       setEnvMasked(true);
-      setEnvText(buildEnvText(data?.environment ?? [], revealedEnv));
+      setEnvText(buildEnvText(data?.environment ?? [], revealedEnv, true));
     }
   };
 
@@ -1214,7 +1221,7 @@ export function ApplicationDetailPage() {
   );
 }
 
-const LogView = ({ entries, liveLines, ref, empty }: { entries: DeploymentLogEntry[]; liveLines: string[]; ref?: Ref<HTMLDivElement>; empty: string }) => {
+const LogView = forwardRef<HTMLDivElement, { entries: DeploymentLogEntry[]; liveLines: string[]; empty: string }>(({ entries, liveLines, empty }, ref) => {
   const all = [
     ...entries.map((e) => ({ stream: e.stream, text: e.message, ts: e.timestamp })),
     ...liveLines.map((line) => ({ stream: "stdout" as const, text: line, ts: "" })),
@@ -1230,4 +1237,4 @@ const LogView = ({ entries, liveLines, ref, empty }: { entries: DeploymentLogEnt
       ))}
     </div>
   );
-};
+});

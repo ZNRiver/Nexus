@@ -259,6 +259,24 @@ export class AgentHub {
         }
         return;
       }
+      case "resource.log": {
+        const resourceIdValue = String(resourceId ?? "");
+        const message = String(data.message ?? "");
+        const resourceType = (String(data.resourceType ?? "") as "database" | "application" | "backup") || "database";
+        if (!resourceIdValue || !message) return;
+        const id = `rlog_${Math.random().toString(36).slice(2, 14)}`;
+        await this.db.run(
+          `INSERT INTO resource_logs (id, resource_type, resource_id, stream, message, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+          [id, resourceType, resourceIdValue, String(data.stream ?? "stdout"), message, new Date().toISOString()],
+        );
+        eventHub.emit({
+          type: "resource.log",
+          resourceType,
+          resourceId: resourceIdValue,
+          entry: { id, resourceType, resourceId: resourceIdValue, stream: (String(data.stream ?? "stdout") as "stdout" | "stderr" | "system"), message, timestamp: new Date().toISOString() },
+        });
+        return;
+      }
       case "container.status": {
         eventHub.emit({ type: "container.status", serverId, container: data as never });
         return;

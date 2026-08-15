@@ -34,7 +34,9 @@ export async function createGameContainer(
     payload.image,
   ];
 
-  const res = await docker.run(args, { timeoutMs: 60000 });
+  // The image pull happens inside `docker run` and Minecraft images are large,
+  // so allow up to 10 minutes for the first boot.
+  const res = await docker.run(args, { timeoutMs: 10 * 60 * 1000 });
   if (res.code !== 0) {
     throw new Error(`game server container failed to start: ${res.stderr.trim() || res.stdout.trim()}`);
   }

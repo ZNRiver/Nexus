@@ -220,6 +220,16 @@ export interface DeploymentLogEntry {
   timestamp: string;
 }
 
+/** Progress log line for any resource operation (create/deploy/backup/restore). */
+export interface ResourceLogEntry {
+  id: string;
+  resourceType: "database" | "application" | "backup";
+  resourceId: string;
+  stream: "stdout" | "stderr" | "system";
+  message: string;
+  timestamp: string;
+}
+
 /* ── Databases ───────────────────────────────────────────────────── */
 export type DatabaseType = "POSTGRESQL" | "MYSQL" | "MARIADB" | "REDIS" | "MONGODB" | "INFLUXDB";
 export type DatabaseStatus = "CREATING" | "RUNNING" | "STOPPED" | "FAILED" | "REMOVING";
@@ -375,12 +385,15 @@ export interface Backup {
   id: ID;
   databaseId?: ID | null;
   applicationId?: ID | null;
+  gameServerId?: ID | null;
   serverId: ID;
   type: BackupType;
   status: BackupStatus;
   sizeBytes?: number | null;
   path?: string | null;
   error?: string | null;
+  sha1?: string | null;
+  locked?: boolean;
   startedAt?: string | null;
   finishedAt?: string | null;
   createdAt: string;
@@ -408,6 +421,33 @@ export interface GameServer {
   status: GameServerStatus;
   containerId?: string | null;
   volumeName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A cron-based schedule that fires a console command at a fixed time. */
+export interface GameSchedule {
+  id: ID;
+  gameServerId: ID;
+  name: string;
+  cron: string;
+  command: string;
+  enabled: boolean;
+  onlyOnline: boolean;
+  lastRunAt?: string | null;
+  nextRunAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A network allocation (IP + port) assigned to a game server. */
+export interface GameAllocation {
+  id: ID;
+  gameServerId: ID;
+  ip: string;
+  port: number;
+  notes?: string | null;
+  isPrimary: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -463,6 +503,7 @@ export type JobType =
   | "image-pull"
   | "server-sync"
   | "game-server-create"
+  | "game-backup"
   | "cleanup";
 
 export type JobStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "CANCELLED";

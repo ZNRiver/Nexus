@@ -9,6 +9,7 @@ import { AuditService } from "../services/audit.service";
 import { SettingsService } from "../services/settings.service";
 import { JobQueue } from "../jobs/queue";
 import { OverviewService } from "../services/overview.service";
+import { listResourceLogs } from "../services/resource-logs.service";
 import { requireAuth, requirePermission, getAuthUser } from "../middleware/auth";
 import { errors } from "../lib/errors";
 import { parseCreatedAtCursor, parsePageQuery, pid } from "../lib/http";
@@ -127,6 +128,155 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     const destroy = c.req.query("destroy") === "true";
     await games.remove(pid(c), { destroyData: destroy });
     return c.json({ success: true });
+  });
+
+  /* ── game server: file manager ──────────────────────────────── */
+
+  app.get("/api/v1/game-servers/:id/files", requireAuth, requirePermission("game.read"), async (c) => {
+    const path = c.req.query("path") || "/";
+    const result = await games.listFiles(pid(c), path);
+    return c.json({ success: true, ...result });
+  });
+
+  app.get("/api/v1/game-servers/:id/files/content", requireAuth, requirePermission("game.read"), async (c) => {
+    const path = c.req.query("path") || "";
+    if (!path) throw errors.validation({ path: "path is required" });
+    const result = await games.readFile(pid(c), path);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/files/write", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ path: z.string().min(1), content: z.string() }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await games.writeFile(pid(c), parsed.data.path, parsed.data.content);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/files/mkdir", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ path: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await games.mkdirFile(pid(c), parsed.data.path);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/files/delete", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ path: z.string().min(1), recursive: z.boolean().optional() }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await games.deleteFile(pid(c), parsed.data.path, parsed.data.recursive ?? false);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/files/rename", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ path: z.string().min(1), newName: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await games.renameFile(pid(c), parsed.data.path, parsed.data.newName);
+    return c.json({ success: true, ...result });
+  });
+
+  /* ── game server: schedules ─────────────────────────────────── */
+
+  const scheduleSchema = z.object({
+    name: z.string().min(1),
+    cron: z.string().min(5),
+    command: z.string().optional().default(""),
+    enabled: z.boolean().optional(),
+    onlyOnline: z.boolean().optional(),
+  });
+
+  app.get("/api/v1/game-servers/:id/schedules", requireAuth, requirePermission("game.read"), async (c) => {
+    const items = await games.listSchedules(pid(c));
+    return c.json({ success: true, items });
+  });
+
+  app.post("/api/v1/game-servers/:id/schedules", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = scheduleSchema.safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const schedule = await games.createSchedule(pid(c), parsed.data);
+    return c.json({ success: true, schedule });
+  });
+
+  app.patch("/api/v1/game-schedules/:scheduleId", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = scheduleSchema.partial().safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const schedule = await games.updateSchedule(pid(c, "scheduleId"), parsed.data);
+    return c.json({ success: true, schedule });
+  });
+
+  app.delete("/api/v1/game-schedules/:scheduleId", requireAuth, requirePermission("game.write"), async (c) => {
+    await games.deleteSchedule(pid(c, "scheduleId"));
+    return c.json({ success: true });
+  });
+
+  app.post("/api/v1/game-schedules/:scheduleId/run", requireAuth, requirePermission("game.write"), async (c) => {
+    const result = await games.runScheduleNow(pid(c, "scheduleId"));
+    return c.json({ success: true, ...result });
+  });
+
+  /* ── game server: backups ───────────────────────────────────── */
+
+  app.post("/api/v1/game-servers/:id/backup", requireAuth, requirePermission("backup.create"), async (c) => {
+    const backup = await games.createBackup(pid(c));
+    return c.json({ success: true, backup });
+  });
+
+  app.get("/api/v1/game-servers/:id/backups", requireAuth, requirePermission("backup.create"), async (c) => {
+    const items = await games.listBackups(pid(c));
+    return c.json({ success: true, items });
+  });
+
+  app.put("/api/v1/backups/:id/lock", requireAuth, requirePermission("backup.create"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const locked = body.locked === true;
+    const backup = await games.setBackupLocked(pid(c), locked);
+    return c.json({ success: true, backup });
+  });
+
+  app.delete("/api/v1/game-backups/:id", requireAuth, requirePermission("backup.delete"), async (c) => {
+    await games.deleteBackup(pid(c));
+    return c.json({ success: true });
+  });
+
+  /* ── game server: network allocations ───────────────────────── */
+
+  app.get("/api/v1/game-servers/:id/allocations", requireAuth, requirePermission("game.read"), async (c) => {
+    const items = await games.listAllocations(pid(c));
+    return c.json({ success: true, items });
+  });
+
+  app.patch("/api/v1/game-allocations/:allocationId", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const notes = typeof body.notes === "string" ? body.notes : "";
+    const allocation = await games.updateAllocationNotes(pid(c, "allocationId"), notes);
+    return c.json({ success: true, allocation });
+  });
+
+  app.post("/api/v1/game-servers/:id/allocations/:allocationId/primary", requireAuth, requirePermission("game.write"), async (c) => {
+    const items = await games.setPrimaryAllocation(pid(c), pid(c, "allocationId"));
+    return c.json({ success: true, items });
+  });
+
+  /* ── game server: startup ───────────────────────────────────── */
+
+  app.get("/api/v1/game-servers/:id/startup", requireAuth, requirePermission("game.read"), async (c) => {
+    const result = await games.getStartup(pid(c));
+    return c.json({ success: true, ...result });
+  });
+
+  app.put("/api/v1/game-servers/:id/startup", requireAuth, requirePermission("game.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({
+      image: z.string().optional(),
+      environment: z.record(z.string()).optional(),
+    }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await games.updateStartup(pid(c), parsed.data);
+    return c.json({ success: true, ...result });
   });
 
   /* ── monitoring ─────────────────────────────────────────────── */
@@ -264,6 +414,18 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
       })),
       nextCursor: result.nextCursor,
     });
+  });
+
+  /* ── resource operation logs (progress for create/deploy/backup) ── */
+
+  app.get("/api/v1/resources/:type/:id/logs", requireAuth, async (c) => {
+    const type = c.req.param("type");
+    const id = c.req.param("id");
+    if (!type || !id || !["database", "application", "backup"].includes(type)) {
+      return c.json({ error: { code: "VALIDATION", message: "Unsupported resource type" } }, 422);
+    }
+    const items = await listResourceLogs(ctx.db, type as "database" | "application" | "backup", id);
+    return c.json({ success: true, items });
   });
 
   /* ── health ─────────────────────────────────────────────────── */

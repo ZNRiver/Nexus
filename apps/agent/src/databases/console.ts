@@ -5,7 +5,7 @@
  * browse tables and run SQL directly against each database.
  */
 import { createLogger } from "@nexus/logger";
-import type { DbObjectsPayload, DbQueryPayload, DbSchemaPayload, DbTableInfoPayload } from "@nexus/types";
+import type { DbExecPayload, DbObjectsPayload, DbQueryPayload, DbSchemaPayload, DbTableInfoPayload, DbWritePayload } from "@nexus/types";
 import { DockerService } from "../docker/service";
 
 const log = createLogger("agent:db-console");
@@ -417,4 +417,151 @@ export async function getDbTableInfo(
       return { ...empty, message: `Table info is not available for ${type} — supported: PostgreSQL, MySQL, MariaDB` };
   }
 }
+
+/** Quote a SQL identifier (column/table name). */
+function sqlIdent(value: string): string {
+  return '"' + value.replace(/"/g, "") + '"';
+}
+
+/** Render a value as a SQL literal (safe escaping). Empty string / "NULL"
+ * (case-insensitive) are treated as SQL NULL — the panel shows NULL cells as
+ * empty, so editing keeps them NULL, and leaving a field blank in the insert
+ * form lets the DB default apply. */
+function sqlLiteral(value: string | number | null): string {
+  if (value === null) return "NULL";
+  if (typeof value === "number") return String(value);
+  const t = value.trim();
+  if (t === "" || /^NULL$/i.test(t)) return "NULL";
+  // Heuristic: unquoted for numbers/null-likes, quoted for everything else.
+  if (/^-?\d+(\.\d+)?$/.test(t) || /^(true|false)$/i.test(t)) {
+    return t;
+  }
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Build a WHERE clause from { column: value } pairs (AND of equals, NULL-aware). */
+function buildWhere(where: Record<string, string | number | null>): string {
+  const parts = Object.entries(where)
+    .filter(([k]) => k.trim().length > 0)
+    .map(([k, v]) => (sqlLiteral(v) === "NULL" ? `${sqlIdent(k)} IS NULL` : `${sqlIdent(k)} = ${sqlLiteral(v)}`));
+  if (parts.length === 0) throw new Error("where is required for update/delete");
+  return parts.join(" AND ");
+}
+
+/**
+ * Write operation (INSERT / UPDATE / DELETE) with safe value escaping.
+ * Runs via the native CLI directly (no \copy wrapper, which only works for
+ * SELECTs on PostgreSQL).
+ */
+export async function runDbWrite(
+  docker: DockerService,
+  payload: DbWritePayload,
+): Promise<{ message: string; affected: number }> {
+  const { type, containerId, name, username, password, table, operation, data, where } = payload;
+  if (!/^[A-Za-z0-9_.-]+$/.test(table)) throw new Error("invalid table name");
+  const user = username ?? "root";
+  const t = sqlIdent(table);
+
+  let sql: string;
+  switch (operation) {
+    case "insert": {
+      // Blank fields are omitted so the DB default/auto-increment applies
+      // (like leaving the field empty in phpMyAdmin).
+      const entries = Object.entries(data).filter(([k, v]) => k.trim().length > 0 && sqlLiteral(v) !== "NULL");
+      if (entries.length === 0) throw new Error("insert requires at least one column with a value");
+      const cols = entries.map(([k]) => sqlIdent(k)).join(", ");
+      const vals = entries.map(([, v]) => sqlLiteral(v)).join(", ");
+      sql = `INSERT INTO ${t} (${cols}) VALUES (${vals});`;
+      break;
+    }
+    case "update": {
+      const sets = Object.entries(data)
+        .filter(([k]) => k.trim().length > 0)
+        .map(([k, v]) => `${sqlIdent(k)} = ${sqlLiteral(v)}`);
+      if (sets.length === 0) throw new Error("update requires at least one column");
+      sql = `UPDATE ${t} SET ${sets.join(", ")} WHERE ${buildWhere(where ?? {})};`;
+      break;
+    }
+    case "delete": {
+      sql = `DELETE FROM ${t} WHERE ${buildWhere(where ?? {})};`;
+      break;
+    }
+    default:
+      throw new Error(`unsupported operation: ${operation}`);
+  }
+
+  const exec = async (cmd: string[]): Promise<string> => {
+    const res = await docker.exec(containerId, cmd, { timeoutMs: 60000 });
+    if (res.exitCode !== 0) {
+      throw new Error(res.output.trim().split("\n").filter((l) => /ERROR|LINE|HINT|DETAIL/i.test(l)).join("\n") || `command failed (exit ${res.exitCode})`);
+    }
+    return res.output;
+  };
+
+  switch (type) {
+    case "POSTGRESQL": {
+      // No `-q` here: psql quiet mode hides the command tag ("INSERT 0 1") we
+      // parse for the affected row count. NOTICEs in the output are harmless.
+      const out = await exec(["sh", "-c", `PGPASSWORD=${shquote(password ?? "")} psql -U ${shquote(user)} -d ${shquote(name)} -X -c ${shquote(sql)}`]);
+      const trimmed = out.trim();
+      const m = trimmed.match(/(INSERT|UPDATE|DELETE)\s+([\d\s]*)/i);
+      // psql tags: "INSERT oid rows", "UPDATE rows", "DELETE rows" — the row
+      // count is always the LAST number in the tag.
+      const nums = (m?.[2] ?? "").trim().split(/\s+/).filter(Boolean).map(Number);
+      const affected = nums.length ? nums[nums.length - 1] : 0;
+      return { message: (m?.[0] ?? trimmed).slice(0, 200), affected };
+    }
+    case "MYSQL":
+    case "MARIADB": {
+      const out = await exec(["sh", "-c", `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(sql)}`]);
+      const m = out.match(/Rows matched: (\d+)/i) || out.match(/(\d+) row\(s\) (affected|changed)/i);
+      return { message: (m?.[0] ?? out.trim()).slice(0, 200), affected: m ? Number(m[1]) : 0 };
+    }
+    default:
+      throw new Error(`write is not available for ${type} — supported: PostgreSQL, MySQL, MariaDB`);
+  }
+}
+
+/** Run arbitrary SQL that does not return rows (DDL/DML) via the native CLI. */
+export async function runDbExec(
+  docker: DockerService,
+  payload: DbExecPayload,
+): Promise<{ message: string }> {
+  const { type, containerId, name, username, password, sql } = payload;
+  if (!sql || !String(sql).trim()) throw new Error("sql is required");
+  const user = username ?? "root";
+  const s = String(sql).trim().replace(/;\s*$/, "");
+
+  switch (type) {
+    case "POSTGRESQL": {
+      // No `-q` here so the command tag ("CREATE TABLE", "ALTER TABLE"…) is
+      // printed and surfaced to the UI as the success message.
+      const res = await docker.exec(containerId, [
+        "sh", "-c",
+        `PGPASSWORD=${shquote(password ?? "")} psql -U ${shquote(user)} -d ${shquote(name)} -X -c ${shquote(s)}`,
+      ], { timeoutMs: 60000 });
+      if (res.exitCode !== 0) {
+        throw new Error(res.output.trim().split("\n").filter((l) => /ERROR|LINE|HINT|DETAIL/i.test(l)).join("\n") || `psql failed (exit ${res.exitCode})`);
+      }
+      const out = res.output.trim();
+      const first = out.split("\n")[0] ?? "";
+      const tag = first.match(/^(CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|COMMENT|VACUUM|ANALYZE|REINDEX)\b/i);
+      return { message: tag ? first.split(" ").slice(0, 4).join(" ") : first.slice(0, 200) };
+    }
+    case "MYSQL":
+    case "MARIADB": {
+      const res = await docker.exec(containerId, [
+        "sh", "-c",
+        `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(s)}`,
+      ], { timeoutMs: 60000 });
+      if (res.exitCode !== 0) {
+        throw new Error(res.output.trim().split("\n").filter((l) => /ERROR/i.test(l)).join("\n") || `mysql failed (exit ${res.exitCode})`);
+      }
+      return { message: res.output.trim().split("\n")[0]?.slice(0, 200) || "OK" };
+    }
+    default:
+      throw new Error(`exec is not available for ${type} — supported: PostgreSQL, MySQL, MariaDB`);
+  }
+}
+
 

@@ -5,6 +5,7 @@ import type { Application, ApplicationWithExtras, Backup, CreateApplicationInput
 import type { AppContext } from "../context";
 import { JobQueue } from "../jobs/queue";
 import { nextRun, parseCron } from "../lib/cron";
+import { appendResourceLog } from "./resource-logs.service";
 
 export function toApplication(row: ApplicationRow): Application {
   let healthcheck: HealthcheckConfig | null = null;
@@ -194,6 +195,7 @@ export class ApplicationsService {
 
     await this.ctx.audit({ action: "application.create", resourceType: "application", resourceId: appId, resourceName: name, serverId: input.serverId });
     await this.ctx.notify("application.created", "Application created", `${name} was created — deploy it to get it running.`);
+    await appendResourceLog(this.db, "application", appId, `Application ${name} created — ready to deploy.`, "system");
     return toApplication(row);
   }
 
@@ -282,6 +284,7 @@ export class ApplicationsService {
 
     await this.ctx.audit({ action: "application.deploy", resourceType: "deployment", resourceId: deploymentId, resourceName: app.name, serverId: app.server_id });
     await this.ctx.notify("deployment.started", "Deployment started", `${app.name} — building and deploying ${opts.branch ?? app.branch}…`);
+    await appendResourceLog(this.db, "application", id, `Deployment queued for ${app.name} (${opts.branch ?? app.branch}).`, "system");
     return { deploymentId };
   }
 
@@ -362,8 +365,8 @@ export class ApplicationsService {
         const existing = await tx.get<EnvironmentVariableRow>(`SELECT * FROM environment_variables WHERE application_id = ? AND var_key = ?`, [applicationId, key]);
         const isSecret = !!v.isSecret;
         let encrypted: string;
-        if (existing && isSecret && /^[•*]+$/.test(v.value.trim())) {
-          // Masked value sent back from the text editor — keep the stored secret.
+        if (existing && /^[•*]+$/.test(v.value.trim())) {
+          // Masked value sent back from the text editor — keep the stored value.
           encrypted = existing.value_encrypted;
         } else {
           encrypted = encrypt(v.value, this.ctx.config.encryptionKey);
@@ -500,6 +503,7 @@ export class ApplicationsService {
 
     await this.db.run(`UPDATE backups SET status = 'RUNNING', started_at = ? WHERE id = ?`, [new Date().toISOString(), backup.id]);
     try {
+      await appendResourceLog(this.db, "backup", backup.id, `Starting volume backup of ${app.name}…`);
       const fileName = `${app.id}_${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz`;
       const result = await hub.request(app.server_id, "volume.backup", {
         backupId: backup.id,
@@ -511,6 +515,7 @@ export class ApplicationsService {
         `UPDATE backups SET status = 'SUCCESS', path = ?, size_bytes = ?, finished_at = ? WHERE id = ?`,
         [result.path, result.sizeBytes, new Date().toISOString(), backup.id],
       );
+      await appendResourceLog(this.db, "backup", backup.id, `Volume backup complete (${Math.round(result.sizeBytes / 1024)} KB).`, "system");
       const owner = await this.db.get<{ id: string }>(`SELECT id FROM users ORDER BY created_at LIMIT 1`);
       if (owner) {
         const { NotificationsService } = await import("./notifications.service");
@@ -532,6 +537,7 @@ export class ApplicationsService {
         new Date().toISOString(),
         backup.id,
       ]);
+      await appendResourceLog(this.db, "backup", backup.id, `Volume backup failed: ${err instanceof Error ? err.message : String(err)}`, "stderr");
       throw err;
     }
   }
@@ -554,8 +560,10 @@ export class ApplicationsService {
 
     const wasRunning = !!app.current_container_id && app.status === "RUNNING";
     try {
+      await appendResourceLog(this.db, "backup", backup.id, `Restoring volume of ${app.name} from backup ${backupId.slice(-8)}…`);
       // 1. Stop the container so the volume is quiescent during the restore.
       if (wasRunning && app.current_container_id) {
+        await appendResourceLog(this.db, "backup", backup.id, "Stopping container to quiesce the volume…");
         await hub.request(app.server_id, "container.stop", { id: app.current_container_id, timeoutSeconds: 15 });
         await this.db.run(`UPDATE applications SET status = 'STOPPED', updated_at = ? WHERE id = ?`, [new Date().toISOString(), app.id]);
       }
@@ -570,9 +578,11 @@ export class ApplicationsService {
 
       // 3. Bring the container back up if it was running before.
       if (wasRunning && app.current_container_id) {
+        await appendResourceLog(this.db, "backup", backup.id, "Restarting container…");
         await hub.request(app.server_id, "container.start", { id: app.current_container_id });
         await this.db.run(`UPDATE applications SET status = 'RUNNING', updated_at = ? WHERE id = ?`, [new Date().toISOString(), app.id]);
       }
+      await appendResourceLog(this.db, "backup", backup.id, "Restore complete.", "system");
     } catch (err) {
       // Best-effort: if the restore failed but we stopped the container, try to
       // bring it back up so the app is not left down.
