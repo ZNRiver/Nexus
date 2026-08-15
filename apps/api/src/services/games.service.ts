@@ -1,7 +1,7 @@
-import type { BackupRow, DbConnection, GameAllocationRow, GameScheduleRow, GameServerRow, JobRow, ServerRow } from "@nexus/database";
+import type { BackupRow, DbConnection, DomainRow, GameAllocationRow, GameScheduleRow, GameServerRow, JobRow, ServerRow } from "@nexus/database";
 import { newId } from "../lib/crypto";
 import { errors } from "../lib/errors";
-import type { Backup, CreateGameServerInput, GameAllocation, GameSchedule, GameServer, GameServerStatus, MinecraftFlavor } from "@nexus/types";
+import type { Backup, CreateGameServerInput, Domain, GameAllocation, GameSchedule, GameServer, GameServerStatus, MinecraftFlavor } from "@nexus/types";
 import type { AppContext } from "../context";
 import { JobQueue } from "../jobs/queue";
 import { eventHub } from "../lib/events";
@@ -1103,5 +1103,50 @@ export class GameServersService {
     }
     await this.ctx.audit({ action: "game.startup.update", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { image, applied } });
     return { gameServer: await this.getPublic(id), applied };
+  }
+
+  /* ── domains (hostnames attached to the game server) ─────────── */
+
+  async listDomains(id: string): Promise<Domain[]> {
+    const row = await this.get(id);
+    const rows = await this.db.all<DomainRow>(`SELECT * FROM domains WHERE game_server_id = ? ORDER BY created_at ASC`, [id]);
+    return rows.map((r) => ({
+      id: r.id,
+      applicationId: null,
+      gameServerId: r.game_server_id ?? null,
+      hostname: r.hostname,
+      isPrimary: !!r.is_primary,
+      sslEnabled: !!r.ssl_enabled,
+      sslStatus: r.ssl_status as Domain["sslStatus"],
+      createdAt: r.created_at,
+    }));
+  }
+
+  async addDomain(id: string, hostname: string, sslEnabled: boolean, isPrimary: boolean): Promise<Domain> {
+    const row = await this.get(id);
+    const h = hostname.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(h)) {
+      throw errors.validation({ hostname: "Invalid hostname" });
+    }
+    const existing = await this.db.get<DomainRow>(`SELECT * FROM domains WHERE game_server_id = ? AND hostname = ?`, [id, h]);
+    if (existing) throw errors.conflict("This domain is already attached to the game server");
+    const domainId = newId("dom");
+    await this.db.run(
+      `INSERT INTO domains (id, application_id, game_server_id, hostname, is_primary, ssl_enabled, ssl_status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+      [domainId, id, h, isPrimary ? 1 : 0, sslEnabled ? 1 : 0, sslEnabled ? "PENDING" : "DISABLED", new Date().toISOString()],
+    );
+    if (isPrimary) {
+      await this.db.run(`UPDATE domains SET is_primary = 0 WHERE game_server_id = ? AND id != ?`, [id, domainId]);
+    }
+    await this.ctx.audit({ action: "domain.create", resourceType: "domain", resourceId: domainId, resourceName: h, serverId: row.server_id });
+    return { id: domainId, applicationId: null, gameServerId: id, hostname: h, isPrimary, sslEnabled, sslStatus: sslEnabled ? "PENDING" : "DISABLED", createdAt: new Date().toISOString() };
+  }
+
+  async removeDomain(id: string, domainId: string): Promise<void> {
+    const row = await this.get(id);
+    const domain = await this.db.get<DomainRow>(`SELECT * FROM domains WHERE id = ? AND game_server_id = ?`, [domainId, id]);
+    if (!domain) throw errors.notFound("Domain not found");
+    await this.db.run(`DELETE FROM domains WHERE id = ?`, [domainId]);
+    await this.ctx.audit({ action: "domain.delete", resourceType: "domain", resourceId: domainId, resourceName: domain.hostname, serverId: row.server_id });
   }
 }

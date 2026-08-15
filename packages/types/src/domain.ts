@@ -369,7 +369,9 @@ export type SslStatus = "DISABLED" | "PENDING" | "ACTIVE" | "FAILED";
 
 export interface Domain {
   id: ID;
-  applicationId: ID;
+  /** owner — exactly one of applicationId / gameServerId is set */
+  applicationId?: ID | null;
+  gameServerId?: ID | null;
   hostname: string;
   isPrimary: boolean;
   sslEnabled: boolean;

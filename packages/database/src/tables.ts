@@ -209,7 +209,8 @@ export interface ComposeStackRow {
 
 export interface DomainRow {
   id: string;
-  application_id: string;
+  application_id: string | null;
+  game_server_id: string | null;
   hostname: string;
   is_primary: boolean | number;
   ssl_enabled: boolean | number;

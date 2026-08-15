@@ -402,6 +402,26 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, items });
   });
 
+  /* ── game server: domains (hostnames) ──────────────────────── */
+
+  app.get("/api/v1/game-servers/:id/domains", requireAuth, requireGamePerm(), async (c) => {
+    const items = await games.listDomains(pid(c));
+    return c.json({ success: true, items });
+  });
+
+  app.post("/api/v1/game-servers/:id/domains", requireAuth, requireGamePerm("startup"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ hostname: z.string().min(1), isPrimary: z.boolean().optional(), sslEnabled: z.boolean().optional() }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const domain = await games.addDomain(pid(c), parsed.data.hostname, parsed.data.sslEnabled ?? false, parsed.data.isPrimary ?? false);
+    return c.json({ success: true, domain });
+  });
+
+  app.delete("/api/v1/game-servers/:id/domains/:domainId", requireAuth, requireGamePerm("startup"), async (c) => {
+    await games.removeDomain(pid(c), pid(c, "domainId"));
+    return c.json({ success: true });
+  });
+
   /* ── game server: startup ───────────────────────────────────── */
 
   app.get("/api/v1/game-servers/:id/startup", requireAuth, requireGamePerm(), async (c) => {

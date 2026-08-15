@@ -437,7 +437,8 @@ export class ApplicationsService {
     const rows = await this.db.all<DomainRow>(`SELECT * FROM domains WHERE application_id = ? ORDER BY created_at ASC`, [applicationId]);
     return rows.map((r) => ({
       id: r.id,
-      applicationId: r.application_id,
+      applicationId: r.application_id ?? null,
+      gameServerId: r.game_server_id ?? null,
       hostname: r.hostname,
       isPrimary: !!r.is_primary,
       sslEnabled: !!r.ssl_enabled,
@@ -463,7 +464,7 @@ export class ApplicationsService {
       await this.db.run(`UPDATE domains SET is_primary = 0 WHERE application_id = ? AND id != ?`, [applicationId, id]);
     }
     await this.ctx.audit({ action: "domain.create", resourceType: "domain", resourceId: id, resourceName: h, serverId: null });
-    return { id, applicationId, hostname: h, isPrimary, sslEnabled, sslStatus: sslEnabled ? "PENDING" : "DISABLED", createdAt: new Date().toISOString() };
+    return { id, applicationId, gameServerId: null, hostname: h, isPrimary, sslEnabled, sslStatus: sslEnabled ? "PENDING" : "DISABLED", createdAt: new Date().toISOString() };
   }
 
   async removeDomain(applicationId: string, domainId: string): Promise<void> {

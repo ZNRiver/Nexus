@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Globe, Rocket, RefreshCw, Wrench, Play, Terminal, Eye, EyeOff, KeyRound, Trash2, Plus, Loader2,
-  RotateCcw, Square, Settings as SettingsIcon, CircleHelp, Check, DatabaseBackup, HardDrive, Download, CalendarClock, Save, Upload, UploadCloud,
+  RotateCcw, Square, Settings as SettingsIcon, CircleHelp, Check, DatabaseBackup, HardDrive, Download, CalendarClock, Save, Upload, UploadCloud, Sparkles,
 } from "lucide-react";
 import { get, post, put, del, patch, downloadBackup } from "@/lib/api";
 import { subscribeDashboard } from "@/lib/ws";
@@ -85,6 +85,10 @@ export function ApplicationDetailPage() {
   const envGutterRef = useRef<HTMLDivElement>(null);
   const [domainHost, setDomainHost] = useState("");
   const [domainSsl, setDomainSsl] = useState(false);
+  const [domainType, setDomainType] = useState<"free" | "custom">("free");
+  const [domainProvider, setDomainProvider] = useState<"traefik.me" | "nip.io" | "sslip.io">("traefik.me");
+  const [domainPrefix, setDomainPrefix] = useState("");
+  const [domainIp, setDomainIp] = useState("");
   const [settings, setSettings] = useState<{ name: string; branch: string; port: string; restartPolicy: string; description: string } | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [provider, setProvider] = useState<{ repository: string; branch: string; buildPath: string; buildContext: string } | null>(null);
@@ -111,7 +115,7 @@ export function ApplicationDetailPage() {
         deployments: Deployment[];
         environment: EnvironmentVariable[];
         domains: Domain[];
-        server?: { id: string; name: string } | null;
+        server?: { id: string; name: string; host?: string | null } | null;
       }>(`/applications/${id}`),
     refetchInterval: 10000,
   });
@@ -371,10 +375,53 @@ export function ApplicationDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["application-detail", id] });
       setDomainHost("");
       setDomainSsl(false);
+      setDomainPrefix("");
       toast("success", "Domain added", domainHost.trim());
     } catch (err) {
       toast("error", "Failed", err instanceof Error ? err.message : "Unknown error");
     }
+  };
+
+  const onDomainTypeChange = (t: "free" | "custom") => {
+    setDomainType(t);
+    if (t === "custom") {
+      setDomainHost((prev) => prev || domainPrefix || "");
+    } else {
+      setDomainHost("");
+    }
+  };
+
+  const domainServerIp = (() => {
+    const h = data?.server?.host;
+    return h && /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ? h : "";
+  })();
+
+  const onDomainPrefixChange = (value: string) => {
+    setDomainPrefix(value);
+    const cleanIp = domainIp || domainServerIp;
+    const cleanPrefix = value.trim().toLowerCase().replace(/[^a-z0-9.-]/g, "").replace(/\.+$/g, "");
+    const ip = cleanIp || "";
+    if (cleanPrefix && ip) setDomainHost(`${cleanPrefix}.${ip}.${domainProvider}`);
+    else if (ip) setDomainHost(`${ip}.${domainProvider}`);
+    else setDomainHost("");
+  };
+
+  const onDomainIpChange = (value: string) => {
+    setDomainIp(value);
+    const cleanPrefix = domainPrefix.trim().toLowerCase().replace(/[^a-z0-9.-]/g, "").replace(/\.+$/g, "");
+    const cleanIp = value.trim();
+    if (cleanPrefix && cleanIp) setDomainHost(`${cleanPrefix}.${cleanIp}.${domainProvider}`);
+    else if (cleanIp) setDomainHost(`${cleanIp}.${domainProvider}`);
+    else setDomainHost("");
+  };
+
+  const onDomainProviderChange = (p: "traefik.me" | "nip.io" | "sslip.io") => {
+    setDomainProvider(p);
+    const cleanPrefix = domainPrefix.trim().toLowerCase().replace(/[^a-z0-9.-]/g, "").replace(/\.+$/g, "");
+    const ip = domainIp || domainServerIp;
+    if (cleanPrefix && ip) setDomainHost(`${cleanPrefix}.${ip}.${p}`);
+    else if (ip) setDomainHost(`${ip}.${p}`);
+    else setDomainHost("");
   };
 
   const removeDomain = async (d: Domain) => {
@@ -845,10 +892,69 @@ export function ApplicationDetailPage() {
                 <CardTitle className="text-sm">Add domain</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label>Hostname</Label>
-                  <Input className="font-mono" value={domainHost} onChange={(e) => setDomainHost(e.target.value)} placeholder="api.example.com" onKeyDown={(e) => e.key === "Enter" && addDomain()} />
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onDomainTypeChange("free")}
+                    className={cn(
+                      "flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-all duration-150",
+                      domainType === "free" ? "border-primary/60 bg-primary/10 text-foreground" : "border-border/60 text-muted-foreground hover:border-border",
+                    )}
+                  >
+                    <Sparkles className={cn("size-3.5", domainType === "free" ? "text-primary" : "text-muted-foreground")} /> Free
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDomainTypeChange("custom")}
+                    className={cn(
+                      "flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-all duration-150",
+                      domainType === "custom" ? "border-primary/60 bg-primary/10 text-foreground" : "border-border/60 text-muted-foreground hover:border-border",
+                    )}
+                  >
+                    <Globe className={cn("size-3.5", domainType === "custom" ? "text-primary" : "text-muted-foreground")} /> Custom
+                  </button>
                 </div>
+
+                {domainType === "free" ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(["traefik.me", "nip.io", "sslip.io"] as const).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => onDomainProviderChange(p)}
+                          className={cn(
+                            "rounded-xl border px-2 py-1.5 text-[11px] font-medium transition-all duration-150",
+                            domainProvider === p ? "border-primary/60 bg-primary/10 text-foreground" : "border-border/60 text-muted-foreground hover:border-border",
+                          )}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1.5">
+                        <Label>Subdomain</Label>
+                        <Input className="font-mono" value={domainPrefix} onChange={(e) => onDomainPrefixChange(e.target.value)} placeholder="my-app" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>IP</Label>
+                        <Input
+                          className="font-mono"
+                          value={domainIp}
+                          onChange={(e) => onDomainIpChange(e.target.value)}
+                          placeholder={data?.server?.host && /^\d{1,3}(\.\d{1,3}){3}$/.test(data.server.host) ? data.server.host : "1.2.3.4"}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label>Hostname</Label>
+                    <Input className="font-mono" value={domainHost} onChange={(e) => setDomainHost(e.target.value)} placeholder="api.example.com" onKeyDown={(e) => e.key === "Enter" && addDomain()} />
+                  </div>
+                )}
+
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Switch size="sm" checked={domainSsl} onChange={setDomainSsl} /> Enable SSL
                 </label>
