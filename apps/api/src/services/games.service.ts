@@ -879,13 +879,38 @@ export class GameServersService {
     return this.listAllocations(row.game_server_id);
   }
 
-  async updateAllocationNotes(allocationId: string, notes: string): Promise<GameAllocation> {
+  /**
+   * Update an allocation's ip / port / notes. Changing the primary allocation's
+   * port recreates the container so the published port really moves.
+   */
+  async updateAllocation(allocationId: string, input: { ip?: string; port?: number; notes?: string | null }): Promise<GameAllocation[]> {
     const row = await this.db.get<GameAllocationRow>(`SELECT * FROM game_allocations WHERE id = ?`, [allocationId]);
     if (!row) throw errors.notFound("Allocation not found");
-    await this.db.run(`UPDATE game_allocations SET notes = ?, updated_at = ? WHERE id = ?`, [notes.trim() || null, new Date().toISOString(), allocationId]);
     const game = await this.get(row.game_server_id);
-    await this.ctx.audit({ action: "game.allocation.update", resourceType: "game-server", resourceId: row.game_server_id, resourceName: game.name, serverId: game.server_id, metadata: { allocationId } });
-    return this.toAllocation((await this.db.get<GameAllocationRow>(`SELECT * FROM game_allocations WHERE id = ?`, [allocationId]))!);
+
+    const ip = input.ip !== undefined ? input.ip.trim() : row.ip;
+    const port = input.port !== undefined ? Math.floor(input.port) : row.port;
+    const notes = input.notes !== undefined ? ((input.notes ?? "").trim() || null) : row.notes;
+    if (!ip) throw errors.validation({ ip: "IP address is required" });
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw errors.validation({ port: "Port must be between 1 and 65535" });
+
+    const existing = await this.db.get<GameAllocationRow>(
+      `SELECT id FROM game_allocations WHERE game_server_id = ? AND ip = ? AND port = ? AND id != ?`,
+      [row.game_server_id, ip, port, allocationId],
+    );
+    if (existing) throw errors.conflict(`Allocation ${ip}:${port} already exists`);
+
+    await this.db.run(`UPDATE game_allocations SET ip = ?, port = ?, notes = ?, updated_at = ? WHERE id = ?`, [ip, port, notes, new Date().toISOString(), allocationId]);
+
+    // If the primary allocation changed port, recreate the container so the
+    // published port really moves (Pterodactyl behaviour).
+    let recreated = false;
+    if (row.is_primary && port !== row.port) {
+      recreated = await this.recreateContainerForPort(game, port);
+    }
+
+    await this.ctx.audit({ action: "game.allocation.update", resourceType: "game-server", resourceId: row.game_server_id, resourceName: game.name, serverId: game.server_id, metadata: { allocationId, oldIp: row.ip, newIp: ip, oldPort: row.port, newPort: port, recreated } });
+    return this.listAllocations(row.game_server_id);
   }
 
   async setPrimaryAllocation(gameServerId: string, allocationId: string): Promise<GameAllocation[]> {
@@ -903,33 +928,37 @@ export class GameServersService {
     let recreated = false;
     if (newPort !== oldPort) {
       await this.db.run(`UPDATE game_servers SET port = ?, updated_at = ? WHERE id = ?`, [newPort, new Date().toISOString(), gameServerId]);
-      const hub = this.ctx.hub;
-      if (hub.isOnline(game.server_id) && game.container_id) {
-        try {
-          const containerName = `nexus-game-${game.id.replace("gme_", "")}`;
-          await hub.request(game.server_id, "container.remove", { id: game.container_id, force: true, volumes: false }).catch(() => {});
-          const result = await hub.request(game.server_id, "game.create", {
-            gameServerId: game.id,
-            image: game.image,
-            containerName,
-            port: newPort,
-            memoryBytes: game.memory_bytes,
-            cpuLimit: game.cpu_limit,
-            env: ensureRcon(parseEnv(game.environment)),
-            volumeName: game.volume_name ?? containerName,
-            restartPolicy: "unless-stopped",
-            labels: {},
-          } as never, { timeoutMs: 10 * 60 * 1000 }) as { containerId: string };
-          await this.db.run(`UPDATE game_servers SET container_id = ?, status = 'RUNNING', updated_at = ? WHERE id = ?`, [result.containerId, new Date().toISOString(), gameServerId]);
-          recreated = true;
-        } catch {
-          recreated = false;
-        }
-      }
+      recreated = await this.recreateContainerForPort(game, newPort);
     }
 
     await this.ctx.audit({ action: "game.allocation.primary", resourceType: "game-server", resourceId: gameServerId, resourceName: game.name, serverId: game.server_id, metadata: { allocationId, oldPort, newPort, recreated } });
     return this.listAllocations(gameServerId);
+  }
+
+  /** Remove the old container and start a fresh one bound to `port`. */
+  private async recreateContainerForPort(game: GameServerRow, port: number): Promise<boolean> {
+    const hub = this.ctx.hub;
+    if (!hub.isOnline(game.server_id) || !game.container_id) return false;
+    try {
+      const containerName = `nexus-game-${game.id.replace("gme_", "")}`;
+      await hub.request(game.server_id, "container.remove", { id: game.container_id, force: true, volumes: false }).catch(() => {});
+      const result = await hub.request(game.server_id, "game.create", {
+        gameServerId: game.id,
+        image: game.image,
+        containerName,
+        port,
+        memoryBytes: game.memory_bytes,
+        cpuLimit: game.cpu_limit,
+        env: ensureRcon(parseEnv(game.environment)),
+        volumeName: game.volume_name ?? containerName,
+        restartPolicy: "unless-stopped",
+        labels: {},
+      } as never, { timeoutMs: 10 * 60 * 1000 }) as { containerId: string };
+      await this.db.run(`UPDATE game_servers SET container_id = ?, status = 'RUNNING', updated_at = ? WHERE id = ?`, [result.containerId, new Date().toISOString(), game.id]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /* ── Sub-users (Pterodactyl-style access control) ────────────── */

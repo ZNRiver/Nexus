@@ -1795,10 +1795,13 @@ function NetworkTab({ game }: { game: GameServer }) {
   const [items, setItems] = useState<GameAllocation[] | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [savingNotes, setSavingNotes] = useState<string | null>(null);
-  const [primaryBusy, setPrimaryBusy] = useState(false);
+  const [primaryBusy, setPrimaryBusy] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState({ ip: "", port: "", notes: "" });
   const [adding, setAdding] = useState(false);
+  const [editTarget, setEditTarget] = useState<GameAllocation | null>(null);
+  const [editForm, setEditForm] = useState({ ip: "", port: "", notes: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<GameAllocation | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -1824,8 +1827,8 @@ function NetworkTab({ game }: { game: GameServer }) {
   const saveNotes = async (a: GameAllocation) => {
     setSavingNotes(a.id);
     try {
-      const res = await patch<{ allocation: GameAllocation }>(`/game-allocations/${a.id}`, { notes: notes[a.id] ?? "" });
-      toast("success", "Notes saved", `${res.allocation.ip}:${res.allocation.port}`);
+      await patch(`/game-allocations/${a.id}`, { notes: notes[a.id] ?? "" });
+      toast("success", "Notes saved", `${a.ip}:${a.port}`);
       void load();
     } catch (e) {
       toast("error", "Save failed", e instanceof Error ? e.message : "Unknown error");
@@ -1835,7 +1838,7 @@ function NetworkTab({ game }: { game: GameServer }) {
   };
 
   const setPrimary = async (a: GameAllocation) => {
-    setPrimaryBusy(true);
+    setPrimaryBusy(a.id);
     try {
       await post(`/game-servers/${id}/allocations/${a.id}/primary`);
       toast("success", "Primary allocation set", `${a.ip}:${a.port}`);
@@ -1843,7 +1846,36 @@ function NetworkTab({ game }: { game: GameServer }) {
     } catch (e) {
       toast("error", "Failed", e instanceof Error ? e.message : "Unknown error");
     } finally {
-      setPrimaryBusy(false);
+      setPrimaryBusy(null);
+    }
+  };
+
+  const openEdit = (a: GameAllocation) => {
+    setEditForm({ ip: a.ip, port: String(a.port), notes: a.notes ?? "" });
+    setEditTarget(a);
+  };
+
+  const saveEdit = async () => {
+    if (!editTarget) return;
+    const port = parseInt(editForm.port, 10);
+    if (!editForm.ip.trim() || !Number.isInteger(port) || port < 1 || port > 65535) {
+      toast("error", "Invalid allocation", "Provide an IP address and a port between 1 and 65535.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await patch(`/game-allocations/${editTarget.id}`, {
+        ip: editForm.ip.trim(),
+        port,
+        notes: editForm.notes,
+      });
+      toast("success", "Allocation updated", `${editForm.ip.trim()}:${port}`);
+      setEditTarget(null);
+      void load();
+    } catch (e) {
+      toast("error", "Update failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -1911,8 +1943,8 @@ function NetworkTab({ game }: { game: GameServer }) {
                     <Star className="size-3" /> PRIMARY
                   </span>
                 ) : (
-                  <Button size="sm" variant="outline" onClick={() => void setPrimary(a)} disabled={primaryBusy}>
-                    <Star className="size-3" /> Set primary
+                  <Button size="sm" variant="outline" onClick={() => void setPrimary(a)} disabled={primaryBusy === a.id}>
+                    {primaryBusy === a.id ? <Loader2 className="size-3 animate-spin" /> : <Star className="size-3" />} Set primary
                   </Button>
                 )}
               </div>
@@ -1929,14 +1961,19 @@ function NetworkTab({ game }: { game: GameServer }) {
                 </Button>
               </div>
             </div>
-            <button
-              onClick={() => setDeleteTarget(a)}
-              disabled={a.isPrimary}
-              title={a.isPrimary ? "Set another allocation as primary first" : "Remove allocation"}
-              className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30"
-            >
-              <Trash2 className="size-4" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button size="sm" variant="ghost" title="Edit allocation" onClick={() => openEdit(a)} className="text-muted-foreground hover:text-foreground">
+                <Pencil className="size-3.5" />
+              </Button>
+              <button
+                onClick={() => setDeleteTarget(a)}
+                disabled={a.isPrimary}
+                title={a.isPrimary ? "Set another allocation as primary first" : "Remove allocation"}
+                className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <Trash2 className="size-4" />
+              </button>
+            </div>
           </CardContent>
         </Card>
       ))}
@@ -1965,6 +2002,30 @@ function NetworkTab({ game }: { game: GameServer }) {
             <Button variant="outline" onClick={() => setAddOpen(false)} disabled={adding}>Cancel</Button>
             <Button onClick={() => void add()} disabled={adding || !form.ip.trim() || !form.port}>
               {adding ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Add allocation
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit allocation modal */}
+      <Modal isOpen={!!editTarget} onClose={() => !savingEdit && setEditTarget(null)} maxWidth="440px" showCloseButton={!savingEdit}>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold">Edit allocation</h2>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            {editTarget?.isPrimary
+              ? "This is the primary allocation — changing the port recreates the container on the new port."
+              : `Editing ${editTarget?.ip}:${editTarget?.port} for ${game.name}.`}
+          </p>
+          <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">IP Address</label>
+          <Input value={editForm.ip} onChange={(e) => setEditForm({ ...editForm, ip: e.target.value })} placeholder="e.g. 192.168.1.10" className="mt-1.5 h-9 font-mono text-[12.5px]" />
+          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Port</label>
+          <Input value={editForm.port} onChange={(e) => setEditForm({ ...editForm, port: e.target.value.replace(/\D/g, "") })} placeholder="e.g. 25570" className="mt-1.5 h-9 font-mono text-[12.5px]" inputMode="numeric" />
+          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Notes (optional)</label>
+          <Input value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} placeholder="e.g. backup port for staff" className="mt-1.5 h-9 text-[12.5px]" />
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setEditTarget(null)} disabled={savingEdit}>Cancel</Button>
+            <Button onClick={() => void saveEdit()} disabled={savingEdit || !editForm.ip.trim() || !editForm.port}>
+              {savingEdit ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />} Save changes
             </Button>
           </div>
         </div>

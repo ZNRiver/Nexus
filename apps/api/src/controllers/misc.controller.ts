@@ -387,9 +387,14 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
 
   app.patch("/api/v1/game-allocations/:allocationId", requireAuth, requireGamePerm("network", gameIdFromAllocation), async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const notes = typeof body.notes === "string" ? body.notes : "";
-    const allocation = await games.updateAllocationNotes(pid(c, "allocationId"), notes);
-    return c.json({ success: true, allocation });
+    const parsed = z.object({
+      ip: z.string().min(1).optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      notes: z.string().nullable().optional(),
+    }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const items = await games.updateAllocation(pid(c, "allocationId"), parsed.data);
+    return c.json({ success: true, items });
   });
 
   app.post("/api/v1/game-servers/:id/allocations/:allocationId/primary", requireAuth, requireGamePerm("network"), async (c) => {
