@@ -23,11 +23,11 @@ export function Switch({ checked, onChange, disabled = false, size = "md", ariaL
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex ${dims.track} shrink-0 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+      className={`relative inline-flex ${dims.track} shrink-0 items-center rounded-full transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
         checked ? "bg-primary" : "bg-muted-foreground/30"
       } ${className}`}
     >
-      <span className={`inline-block ${dims.knob} transform rounded-full bg-background shadow-sm transition-transform ${checked ? dims.on : dims.off}`} />
+      <span className={`inline-block ${dims.knob} transform rounded-full bg-white shadow-sm transition-all duration-200 ${checked ? dims.on : dims.off}`} />
     </button>
   );
 }

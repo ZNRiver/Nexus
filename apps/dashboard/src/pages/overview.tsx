@@ -14,22 +14,22 @@ import type { DashboardOverview } from "@nexus/types";
 
 function StatCard({ label, value, sub, icon: Icon, href }: { label: string; value: string | number; sub?: string; icon: React.ElementType; href?: string }) {
   const inner = (
-    <Card className="card-hover">
+    <Card className="group card-hover transition-all duration-200">
       <CardContent className="p-5">
         <div className="flex items-start justify-between">
-          <div>
-            <p className="text-[12px] font-medium text-muted-foreground">{label}</p>
-            <p className="mt-1.5 text-2xl font-semibold tabular tracking-tight">{value}</p>
-            {sub && <p className="mt-0.5 text-[11px] text-muted-foreground/80">{sub}</p>}
+          <div className="min-w-0">
+            <p className="text-[12px] font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
+            <p className="mt-2 text-3xl font-bold tabular tracking-tight text-foreground">{value}</p>
+            {sub && <p className="mt-1 text-[11px] text-muted-foreground/80">{sub}</p>}
           </div>
-          <div className="flex size-8 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-            <Icon className="size-4" />
+          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
+            <Icon className="size-5" strokeWidth={1.8} />
           </div>
         </div>
       </CardContent>
     </Card>
   );
-  return href ? <Link to={href}>{inner}</Link> : inner;
+  return href ? <Link to={href} className="transition-transform hover:scale-[1.01] active:scale-[0.99]">{inner}</Link> : inner;
 }
 
 export function OverviewPage() {

@@ -89,7 +89,7 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`sticky top-0 flex h-screen shrink-0 flex-col border-r border-border/60 bg-card/40 backdrop-blur transition-[width] duration-200 ${
+      className={`sticky top-0 flex h-screen shrink-0 flex-col border-r border-border/60 bg-card/40 backdrop-blur transition-all duration-300 ease-in-out ${
         collapsed ? "w-[72px]" : "w-[248px]"
       }`}
     >
@@ -136,11 +136,11 @@ export function Sidebar() {
                     key={key}
                     to={href}
                     title={collapsed ? label : undefined}
-                    className={`flex items-center rounded-xl px-3 py-2.5 text-[14px] font-medium transition-colors ring-inset ${
+                    className={`flex items-center rounded-xl px-3 py-2.5 text-[14px] font-medium transition-all duration-150 ring-inset ${
                       collapsed ? "justify-center" : "gap-3"
                     } ${
                       active
-                        ? "bg-foreground/[0.08] text-foreground ring-1 ring-foreground/[0.1]"
+                        ? "bg-primary/10 text-primary ring-1 ring-primary/20"
                         : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground hover:ring-1 hover:ring-border/80"
                     }`}
                   >

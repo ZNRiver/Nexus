@@ -71,23 +71,23 @@ export function OperationLogPanel({
   }, [lines]);
 
   return (
-    <div className={cn("flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-[#0a0a0b]", className)}>
+    <div className={cn("flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-[#0a0a0b] shadow-lg", className)}>
       <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <span className="flex size-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
             <Terminal className="size-3.5" />
           </span>
           <div>
-            <p className="text-sm font-semibold leading-tight">{title}</p>
-            <p className="text-[11px] leading-tight text-muted-foreground">{subtitle}</p>
+            <p className="text-sm font-semibold leading-tight text-white">{title}</p>
+            <p className="text-[11px] leading-tight text-zinc-400">{subtitle}</p>
           </div>
         </div>
         {isLoading ? (
-          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          <Loader2 className="size-4 animate-spin text-zinc-400" />
         ) : (
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-2 text-[11px] text-zinc-400">
             {stats.total > 0 && <span>{stats.total} lines</span>}
-            {stats.stderr > 0 && <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-red-400">{stats.stderr} errors</span>}
+            {stats.stderr > 0 && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-400">{stats.stderr} errors</span>}
           </div>
         )}
       </div>

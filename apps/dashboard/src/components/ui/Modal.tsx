@@ -57,15 +57,14 @@ export function Modal({
     <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex }} onClick={handleBackdropClick}>
       <div className="absolute inset-0 backdrop-blur-lg transition-opacity duration-300" style={{ background: "var(--th-overlay)", opacity: isVisible ? 1 : 0 }} />
       <div
-        className="relative w-full rounded-2xl shadow-2xl flex flex-col transition-all duration-300 !overflow-x-hidden border border-border/50"
+        className="relative w-full rounded-2xl shadow-2xl flex flex-col transition-all duration-300 !overflow-x-hidden border border-border/50 bg-card"
         style={{
-          background: "rgb(var(--card))",
           width,
           maxWidth,
           maxHeight,
           height,
           opacity: isVisible ? 1 : 0,
-          transform: isVisible ? "scale(1) translateY(0)" : "scale(0.95) translateY(10px)",
+          transform: isVisible ? "scale(1) translateY(0)" : "scale(0.97) translateY(8px)",
         }}
       >
         {showCloseButton && (

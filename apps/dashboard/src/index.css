@@ -12,7 +12,7 @@
   --card-foreground: 24 24 27;
   --popover: 255 255 255;
   --popover-foreground: 24 24 27;
-  --primary: 79 70 229;
+  --primary: 37 99 235;
   --primary-foreground: 255 255 255;
   --secondary: 244 244 245;
   --secondary-foreground: 39 39 42;
@@ -26,7 +26,7 @@
   --warning: 217 119 6;
   --border: 228 228 231;
   --input: 228 228 231;
-  --ring: 79 70 229;
+  --ring: 37 99 235;
   --th-overlay: rgba(24, 24, 27, 0.35);
 }
 
@@ -37,7 +37,7 @@
   --card-foreground: 231 231 234;
   --popover: 27 27 30;
   --popover-foreground: 231 231 234;
-  --primary: 139 131 240;
+  --primary: 96 165 250;
   --primary-foreground: 13 13 18;
   --secondary: 38 38 42;
   --secondary-foreground: 231 231 234;
@@ -51,7 +51,7 @@
   --warning: 245 158 11;
   --border: 42 42 46;
   --input: 42 42 46;
-  --ring: 139 131 240;
+  --ring: 96 165 250;
   --th-overlay: rgba(0, 0, 0, 0.55);
 }
 
@@ -62,7 +62,7 @@
   --card-foreground: 237 237 240;
   --popover: 13 13 15;
   --popover-foreground: 237 237 240;
-  --primary: 124 116 240;
+  --primary: 59 130 246;
   --primary-foreground: 10 10 14;
   --secondary: 26 26 30;
   --secondary-foreground: 237 237 240;
@@ -76,7 +76,7 @@
   --warning: 245 158 11;
   --border: 30 30 34;
   --input: 30 30 34;
-  --ring: 124 116 240;
+  --ring: 59 130 246;
   --th-overlay: rgba(0, 0, 0, 0.6);
 }
 

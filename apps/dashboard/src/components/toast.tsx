@@ -59,7 +59,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               role="alert"
               onClick={() => dismiss(t.id)}
               className={cn(
-                "flex min-w-[280px] max-w-[380px] cursor-pointer items-start gap-3 rounded-xl border bg-card px-4 py-3 text-sm shadow-lg animate-slide-in-up",
+                "flex min-w-[300px] max-w-[400px] cursor-pointer items-start gap-3 rounded-xl border bg-card px-4 py-3.5 text-sm shadow-xl animate-slide-in-up transition-all duration-200 hover:shadow-2xl",
                 t.type === "error" && "border-destructive/40",
                 t.type === "success" && "border-success/40",
                 t.type === "info" && "border-border",

@@ -228,9 +228,9 @@ export function CustomSelect<T extends string>({
         aria-expanded={isOpen}
         aria-haspopup="listbox"
         className={cn(
-          "flex h-[42px] w-full items-center justify-between gap-2 rounded-lg border border-input bg-muted/40 px-3 text-sm transition-all duration-150",
+          "flex h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-input bg-muted/40 px-3 text-sm transition-all duration-200",
           "focus:outline-none focus-visible:border-ring/70 focus-visible:ring-2 focus-visible:ring-ring/15",
-          isOpen ? "border-ring/70 bg-muted/60" : "hover:bg-muted/60 hover:border-border",
+          isOpen ? "border-ring/70 bg-muted/60" : "hover:bg-muted/60 hover:border-border/80",
         )}
         type="button"
       >

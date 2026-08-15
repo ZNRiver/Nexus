@@ -1,17 +1,17 @@
 import { cn } from "@/lib/utils";
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-xl bg-muted/70", className)} />;
+  return <div className={cn("animate-pulse rounded-xl bg-muted/60", className)} />;
 }
 
 export function CardSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <div className="rounded-2xl border border-border/60 bg-card p-5 space-y-4">
-      <Skeleton className="h-4 w-32" />
+      <Skeleton className="h-5 w-32" />
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="flex items-center justify-between">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-16" />
         </div>
       ))}
     </div>
@@ -21,7 +21,7 @@ export function CardSkeleton({ rows = 3 }: { rows?: number }) {
 export function TableSkeleton({ rows = 6, cols = 4 }: { rows?: number; cols?: number }) {
   return (
     <div className="rounded-2xl border border-border/60 bg-card overflow-hidden">
-      <div className="p-4 space-y-3">
+      <div className="p-5 space-y-4">
         {Array.from({ length: rows }).map((_, i) => (
           <div key={i} className="flex gap-4">
             {Array.from({ length: cols }).map((_, j) => (

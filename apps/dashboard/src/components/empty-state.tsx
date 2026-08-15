@@ -13,12 +13,12 @@ interface EmptyStateProps {
 
 export function EmptyState({ icon, title, description, actionLabel, onAction, actionHref, className = "" }: EmptyStateProps) {
   return (
-    <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/70 bg-card/40 px-6 py-16 text-center ${className}`}>
-      {icon && <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">{icon}</div>}
+    <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/70 bg-card/40 px-6 py-20 text-center transition-colors hover:border-border/90 ${className}`}>
+      {icon && <div className="mb-5 flex size-14 items-center justify-center rounded-2xl bg-muted/80 text-muted-foreground">{icon}</div>}
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-      {description && <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">{description}</p>}
+      {description && <p className="mt-2 max-w-sm text-sm text-muted-foreground leading-relaxed">{description}</p>}
       {(actionLabel && onAction) || actionHref ? (
-        <Button className="mt-5" size="sm" onClick={onAction} asChild={!!actionHref}>
+        <Button className="mt-6" size="sm" onClick={onAction} asChild={!!actionHref}>
           {actionHref ? <a href={actionHref}>{actionLabel}</a> : <span>{actionLabel}</span>}
         </Button>
       ) : null}

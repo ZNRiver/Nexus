@@ -29,14 +29,14 @@ export function Sparkline({ data, width = 120, height = 32, stroke = "rgb(var(--
         <>
           <defs>
             <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={stroke} stopOpacity="0.25" />
+              <stop offset="0%" stopColor={stroke} stopOpacity="0.2" />
               <stop offset="100%" stopColor={stroke} stopOpacity="0" />
             </linearGradient>
           </defs>
           <polygon points={area} fill={`url(#${id})`} />
         </>
       )}
-      <polyline points={line} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points={line} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-sm" />
     </svg>
   );
 }

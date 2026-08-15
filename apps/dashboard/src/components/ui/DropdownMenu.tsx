@@ -48,10 +48,10 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({ actions, trigger, align = "
 
       {isOpen && (
         <div
-          className={`absolute z-50 mt-2 rounded-2xl border border-border/60 bg-popover shadow-xl shadow-black/[0.08] overflow-hidden animate-fade-in ${align === "right" ? "end-0" : "start-0"}`}
+          className={`absolute z-50 mt-2 rounded-2xl border border-border/60 bg-popover shadow-xl shadow-black/[0.12] overflow-hidden animate-fade-in ${align === "right" ? "end-0" : "start-0"}`}
           style={{ minWidth: "220px" }}
         >
-          <div className="py-2 px-2 flex flex-col">
+          <div className="py-1.5 px-1.5 flex flex-col">
             {actions.map((action, index) => {
               if (!action.label && action.divider) {
                 return <div key={action.id} className="my-2 mx-3 border-t border-border/50" />;

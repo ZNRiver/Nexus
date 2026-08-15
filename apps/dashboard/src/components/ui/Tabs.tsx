@@ -23,8 +23,8 @@ export function Tabs<K extends string>({ tabs, value, onChange, className = "" }
         .filter((tab) => !tab.hidden)
         .map(({ key, label, icon: Icon, href, count }) => {
           const active = key === value;
-          const itemClass = `relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors ${
-            active ? "text-foreground" : "text-muted-foreground hover:text-foreground/70"
+          const itemClass = `relative inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-all duration-200 ${
+            active ? "text-foreground" : "text-muted-foreground hover:text-foreground/80"
           }`;
           const inner = (
             <>
@@ -35,7 +35,7 @@ export function Tabs<K extends string>({ tabs, value, onChange, className = "" }
                   {count}
                 </span>
               )}
-              {active && <span className="absolute bottom-0 start-4 end-4 h-0.5 rounded-full bg-primary" />}
+              {active && <span className="absolute bottom-0 start-4 end-4 h-0.5 rounded-full bg-primary transition-all duration-200" />}
             </>
           );
           return href ? (

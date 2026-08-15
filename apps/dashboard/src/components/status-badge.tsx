@@ -39,7 +39,7 @@ export function StatusDot({ status, className }: { status: string; className?: s
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const c = STATUS_COLORS[status] ?? { dot: "bg-muted-foreground/70", text: "text-muted-foreground", bg: "bg-muted/60 border-border/60" };
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide", c.bg, c.text, className)}>
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider", c.bg, c.text, className)}>
       <span className={cn("size-1.5 rounded-full", c.dot)} />
       {status.replace(/_/g, " ")}
     </span>
