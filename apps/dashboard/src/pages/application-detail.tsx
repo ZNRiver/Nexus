@@ -282,7 +282,10 @@ export function ApplicationDetailPage() {
       await patch(`/applications/${id}`, {
         repository: provider.repository.trim(),
         branch: provider.branch.trim(),
+        // The same Build Path field drives the Dockerfile path (DOCKERFILE) or
+        // the compose file path (COMPOSE) — send both so the active one sticks.
         dockerfilePath: provider.buildPath.trim() || "Dockerfile",
+        composePath: provider.buildPath.trim() || "docker-compose.yml",
         buildContext: provider.buildContext.trim() || ".",
       });
       queryClient.invalidateQueries({ queryKey: ["application-detail", id] });
@@ -761,8 +764,13 @@ export function ApplicationDetailPage() {
                         <Input value={provider.branch} onChange={(e) => setProvider({ ...provider, branch: e.target.value })} placeholder="main" />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-[13px]">Build Path</Label>
-                        <Input className="font-mono" value={provider.buildPath} onChange={(e) => setProvider({ ...provider, buildPath: e.target.value })} placeholder="Dockerfile" />
+                        <Label className="text-[13px]">{app.deploymentMethod === "COMPOSE" ? "Compose File" : "Build Path"}</Label>
+                        <Input
+                          className="font-mono"
+                          value={provider.buildPath}
+                          onChange={(e) => setProvider({ ...provider, buildPath: e.target.value })}
+                          placeholder={app.deploymentMethod === "COMPOSE" ? "docker-compose.yml" : "Dockerfile"}
+                        />
                       </div>
                     </div>
                     <div className="space-y-1.5">
@@ -842,8 +850,13 @@ export function ApplicationDetailPage() {
                   <>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">
-                        <Label className="text-[13px]">Docker File</Label>
-                        <Input className="font-mono" value={provider.buildPath} onChange={(e) => setProvider({ ...provider, buildPath: e.target.value })} placeholder="Dockerfile" />
+                        <Label className="text-[13px]">{app.deploymentMethod === "COMPOSE" ? "Compose File" : "Docker File"}</Label>
+                        <Input
+                          className="font-mono"
+                          value={provider.buildPath}
+                          onChange={(e) => setProvider({ ...provider, buildPath: e.target.value })}
+                          placeholder={app.deploymentMethod === "COMPOSE" ? "docker-compose.yml" : "Dockerfile"}
+                        />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[13px]">Docker Context Path</Label>

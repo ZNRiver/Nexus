@@ -294,6 +294,15 @@ async function deployCompose(
   }
   onLog("Configuration valid");
 
+  // Keep the last output lines so a failure surfaces the real docker error.
+  const recent: string[] = [];
+  const track = (line: string) => {
+    emit("deployment.log", deploymentId, { message: line });
+    recent.push(line);
+    if (recent.length > 20) recent.shift();
+  };
+  const tail = () => (recent.length ? `\n${recent.join("\n")}` : "");
+
   onLog("Pulling images…");
   const pull = await docker.compose({
     projectName: payload.composeProjectName,
@@ -301,7 +310,7 @@ async function deployCompose(
     cwd: repoDir,
     env,
     action: "pull",
-    onLine: (line) => emit("deployment.log", deploymentId, { message: line }),
+    onLine: track,
   });
   if (pull.code !== 0) onLog("Pull reported warnings — continuing");
 
@@ -313,10 +322,10 @@ async function deployCompose(
     cwd: repoDir,
     env,
     action: "build",
-    onLine: (line) => emit("deployment.log", deploymentId, { message: line }),
+    onLine: track,
     signal: makeAbortSignal(deploymentId),
   });
-  if (build.code !== 0) throw new Error("docker compose build failed");
+  if (build.code !== 0) throw new Error(`docker compose build failed:${tail()}`);
 
   onLog("Starting stack…");
   const up = await docker.compose({
@@ -326,10 +335,10 @@ async function deployCompose(
     env,
     action: "up",
     extraArgs: ["-d"],
-    onLine: (line) => emit("deployment.log", deploymentId, { message: line }),
+    onLine: track,
     signal: makeAbortSignal(deploymentId),
   });
-  if (up.code !== 0) throw new Error("docker compose up failed");
+  if (up.code !== 0) throw new Error(`docker compose up failed:${tail()}`);
 
   emit("deployment.status", deploymentId, { status: "STARTING" });
   const containers = await docker.composePs({ projectName: payload.composeProjectName, file: composeFile, cwd: repoDir });
