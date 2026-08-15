@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Check, Loader2, Boxes, Server as ServerIcon, GitBranch, FileCode2, Rocket, SlidersHorizontal, ListChecks, CircleHelp } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { GitLogo } from "@/components/git-logos";
-import { OperationLogPanel } from "@/components/operation-log-panel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +13,7 @@ import { CustomSelect } from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/Switch";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/components/toast";
+import { OperationLogPanel } from "@/components/operation-log-panel";
 import { cn } from "@/lib/utils";
 import type { Server, Project } from "@nexus/types";
 
@@ -37,7 +37,8 @@ export function NewApplicationPage() {
   const [step, setStep] = useState(0);
   const [creating, setCreating] = useState(false);
   // Created application id — shows live progress while it deploys.
-  const [progressApp, setProgressApp] = useState<string | null>(null);
+  const [createdAppId, setCreatedAppId] = useState<string | null>(null);
+
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -124,15 +125,17 @@ export function NewApplicationPage() {
         environment: env.filter((r) => r.key.trim()).map((r) => ({ key: r.key.trim(), value: r.value, isSecret: r.isSecret })),
       };
       const res = await post<{ application: { id: string } }>("/applications", payload);
-      toast("success", "Application created", `${form.name} — provisioning…`);
-      setProgressApp(res.application.id);
-      setCreating(false);
-      // Kick off the first deploy so the progress panel has real work to show.
+      toast("success", "Application created", `${form.name} — deploying…`);
+      // Kick off the first deploy immediately.
       try {
         await post<{ deploymentId: string }>(`/applications/${res.application.id}/deploy`, { branch: form.branch });
       } catch {
-        /* deploy failure shows up in the panel */
+        /* deploy failure shows up on the detail page */
       }
+      setCreating(false);
+      setCreatedAppId(res.application.id);
+      // Redirect to the detail page after a brief moment so the user sees the logs panel first.
+      setTimeout(() => navigate(`/applications/${res.application.id}`), 1800);
     } catch (err) {
       toast("error", "Creation failed", err instanceof Error ? err.message : "Unknown error");
       setCreating(false);
@@ -417,7 +420,7 @@ export function NewApplicationPage() {
     <div className="p-6">
       <PageHeader title="New Application" description="Deploy a service from a Git repository to any server." />
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+      <div className={cn("grid items-start gap-6", createdAppId ? "lg:grid-cols-[minmax(0,1fr)_420px]" : "lg:grid-cols-[minmax(0,1fr)_400px]")}>
         <div>
           {/* Stepper */}
           <div className="mb-6 flex items-center gap-2">
@@ -460,17 +463,21 @@ export function NewApplicationPage() {
           </Card>
         </div>
 
-        {progressApp && (
+        {/* Right column — live deployment logs after creation */}
+        {createdAppId && (
           <div className="lg:sticky lg:top-6">
-            <OperationLogPanel resourceType="application" resourceId={progressApp} />
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="text-[11px] text-muted-foreground">The first deploy runs automatically — this panel streams its progress.</p>
-              <Button size="sm" variant="outline" onClick={() => navigate(`/applications/${progressApp}`)}>
-                Open application <ArrowRight className="size-3.5" />
-              </Button>
+            <OperationLogPanel
+              resourceType="application"
+              resourceId={createdAppId}
+              title="Deployment Logs"
+              subtitle="Details of the request log entry."
+            />
+            <div className="mt-3">
+              <p className="text-[11px] text-muted-foreground">Redirecting to the application…</p>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

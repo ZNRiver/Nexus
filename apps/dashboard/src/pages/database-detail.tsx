@@ -300,8 +300,12 @@ export function DatabaseDetailPage() {
   const stats = statsQ.data;
   const statsError = statsQ.error ? (statsQ.error as Error).message : null;
 
+  const isProvisioning = db.status === "CREATING" || busy;
+
   return (
     <div className="p-6">
+      <div className={cn(isProvisioning && "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]")}>
+      <div>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
@@ -677,6 +681,27 @@ export function DatabaseDetailPage() {
           </div>
         )}
       </div>
+
+      </div> {/* end left column */}
+
+      {/* Right side — live deployment logs while provisioning or deploying */}
+      {isProvisioning && (
+        <div className="lg:sticky lg:top-6">
+          <OperationLogPanel
+            resourceType="database"
+            resourceId={db.id}
+            title="Deployment Logs"
+            subtitle="Details of the request log entry."
+          />
+          <div className="mt-3">
+            <p className="text-[11px] text-muted-foreground">
+              Status: <span className="font-medium text-foreground">{db.status}</span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      </div> {/* end grid */}
 
       {/* Exec terminal */}
       <Modal isOpen={execOpen} onClose={() => setExecOpen(false)} width="640px" maxWidth="640px">
