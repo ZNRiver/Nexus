@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppLayout } from "@/layout";
 import { SetupPage } from "@/pages/setup";
@@ -28,6 +29,21 @@ import { SettingsPage } from "@/pages/settings";
 import { NotFoundPage } from "@/pages/not-found";
 
 export function App() {
+  // Suppress the browser's native context menu across the whole panel, so
+  // right-click only opens our custom menus (phpMyAdmin-style in the DB browser).
+  // Native menu stays on text fields for copy/paste, and on elements that opt in
+  // via [data-native-context].
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("input, textarea, [data-native-context]")) return;
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
+  }, []);
+
   return (
     <BrowserRouter>
       <Routes>

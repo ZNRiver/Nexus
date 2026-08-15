@@ -7,7 +7,8 @@ import {
   HardDrive as HardDriveIcon, Cpu as CpuIcon, MemoryStick as MemoryIcon, CalendarClock, Save, Download, Upload, UploadCloud,
   SquareTerminal, Table2, PlayCircle, Clock3, Database as DatabaseIcon, FolderTree, ChevronRight, ChevronDown,
   Filter, Columns3, Link2, Zap, ListTree, Search, Server, Users, Info, Wrench,
-  Hash, Type as TypeIcon, Braces, ClipboardList, Network, Plus, Check, X, Eraser, Pencil,
+  Hash, Type as TypeIcon, Braces, ClipboardList, Network, Plus, Check, X, Eraser, Pencil, FolderPlus, FilePlus2,
+  ArrowUp, ArrowDown, ChevronsUpDown, ChevronLeft,
 } from "lucide-react";
 import { get, post, put, del, downloadBackup } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -921,7 +922,14 @@ function DbBrowser({ db }: { db: Database }) {
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [dataTab, setDataTab] = useState<"data" | "properties" | "diagram">("data");
   const [structTab, setStructTab] = useState<"columns" | "constraints" | "fks" | "triggers" | "indexes">("columns");
-  const quote = (v: string) => '"' + v.replace(/"/g, "") + '"';
+  // Pagination + column sorting for the data grid.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(100);
+  const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" } | null>(null);
+  const [totalRows, setTotalRows] = useState<number | null>(null);
+  // Identifier quoting per dialect: backticks for MySQL/MariaDB, double quotes for PostgreSQL.
+  const ident = (v: string) =>
+    db.type === "MYSQL" || db.type === "MARIADB" ? "`" + v.split("`").join("") + "`" : '"' + v.split('"').join("") + '"';
 
   const loadObjects = async () => {
     setLoading(true);
@@ -955,6 +963,9 @@ function DbBrowser({ db }: { db: Database }) {
     setStructTab("columns");
     setRows(null);
     setRowsError(null);
+    setPage(0);
+    setSort(null);
+    setTotalRows(null);
     setInfoLoading(true);
     try {
       const [infoRes] = await Promise.all([
@@ -969,16 +980,27 @@ function DbBrowser({ db }: { db: Database }) {
     }
   };
 
-  const loadRows = async (name: string, where: string) => {
+  const loadRows = async (name: string, where: string, opts?: { page?: number; pageSize?: number; sort?: typeof sort }) => {
+    const p = opts?.page ?? page;
+    const ps = opts?.pageSize ?? pageSize;
+    const s = opts?.sort ?? sort;
     setRowsLoading(true);
     setRowsError(null);
     try {
-      const sql = `SELECT * FROM ${quote(name)}${where.trim() ? ` WHERE ${where.trim()}` : ""} LIMIT 100;`;
-      const res = await post<{ columns: string[]; rows: string[][]; truncated: boolean; message?: string }>(`/databases/${id}/query`, { sql });
+      const w = where.trim();
+      const order = s ? ` ORDER BY ${ident(s.col)} ${s.dir.toUpperCase()}` : "";
+      const sql = `SELECT * FROM ${ident(name)}${w ? ` WHERE ${w}` : ""}${order} LIMIT ${ps} OFFSET ${p * ps};`;
+      const [res, cnt] = await Promise.all([
+        post<{ columns: string[]; rows: string[][]; truncated: boolean; message?: string }>(`/databases/${id}/query`, { sql }),
+        post<{ columns: string[]; rows: string[][]; message?: string }>(`/databases/${id}/query`, { sql: `SELECT COUNT(*) AS total FROM ${ident(name)}${w ? ` WHERE ${w}` : ""};` }),
+      ]);
       setRows({ columns: res.columns, rows: res.rows });
+      const t = Number(cnt.rows?.[0]?.[0]);
+      setTotalRows(Number.isFinite(t) ? t : null);
     } catch (err) {
       setRowsError(err instanceof Error ? err.message : "Query failed");
       setRows(null);
+      setTotalRows(null);
     } finally {
       setRowsLoading(false);
     }
@@ -986,8 +1008,32 @@ function DbBrowser({ db }: { db: Database }) {
 
   const runFilter = () => {
     if (!selectedTable) return;
-    void loadRows(selectedTable, filter);
+    setPage(0);
+    void loadRows(selectedTable, filter, { page: 0 });
   };
+
+  const goToPage = (p: number) => {
+    if (!selectedTable || p < 0) return;
+    setPage(p);
+    void loadRows(selectedTable, filter, { page: p });
+  };
+
+  const changePageSize = (ps: number) => {
+    if (!selectedTable) return;
+    setPageSize(ps);
+    setPage(0);
+    void loadRows(selectedTable, filter, { page: 0, pageSize: ps });
+  };
+
+  const toggleSort = (col: string) => {
+    if (!selectedTable) return;
+    const next: typeof sort = sort?.col === col ? (sort.dir === "asc" ? { col, dir: "desc" } : null) : { col, dir: "asc" };
+    setSort(next);
+    setPage(0);
+    void loadRows(selectedTable, filter, { page: 0, sort: next });
+  };
+
+  const totalPages = totalRows === null ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
 
   /* ── data editing (phpMyAdmin-style) ─────────────────────── */
   const [edit, setEdit] = useState<{ row: number; col: string; value: string } | null>(null);
@@ -1004,6 +1050,54 @@ function DbBrowser({ db }: { db: Database }) {
   const [truncateOpen, setTruncateOpen] = useState(false);
   const [dropOpen, setDropOpen] = useState(false);
   const [mutBusy, setMutBusy] = useState(false);
+
+  /* ── right-click context menu (phpMyAdmin-style) ───────────── */
+  type CtxMenu =
+    | { x: number; y: number; kind: "table"; name: string }
+    | { x: number; y: number; kind: "database"; name: string }
+    | { x: number; y: number; kind: "empty" };
+  type CtxMenuPayload = CtxMenu extends infer T ? (T extends { x: number; y: number } ? Omit<T, "x" | "y"> : never) : never;
+  const [ctx, setCtx] = useState<CtxMenu | null>(null);
+  const ctxRef = useRef<HTMLDivElement | null>(null);
+  const [truncateTarget, setTruncateTarget] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [dropDbTarget, setDropDbTarget] = useState<string | null>(null);
+  const [createDbOpen, setCreateDbOpen] = useState(false);
+  const [createDbName, setCreateDbName] = useState("");
+  const [createDbBusy, setCreateDbBusy] = useState(false);
+  const [createTableOpen, setCreateTableOpen] = useState(false);
+  const [createTableName, setCreateTableName] = useState("");
+  const [createTableColumns, setCreateTableColumns] = useState("id SERIAL PRIMARY KEY\ncreated_at TIMESTAMPTZ DEFAULT now()");
+  const [createTableBusy, setCreateTableBusy] = useState(false);
+
+  const openCtx = (e: React.MouseEvent, menu: CtxMenuPayload) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x = Math.max(8, Math.min(e.clientX, window.innerWidth - 250));
+    const y = Math.max(8, Math.min(e.clientY, window.innerHeight - 320));
+    setCtx({ ...menu, x, y });
+  };
+
+  useEffect(() => {
+    if (!ctx) return;
+    const close = () => setCtx(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    const onScroll = () => close();
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [ctx]);
 
   /** WHERE built from every column of a row (NULL cells match via IS NULL). */
   const rowWhere = (rowIdx: number): Record<string, string | number | null> => {
@@ -1111,10 +1205,11 @@ function DbBrowser({ db }: { db: Database }) {
     if (!selectedTable) return;
     setMutBusy(true);
     try {
-      await post(`/databases/${id}/exec-sql`, { sql: `TRUNCATE TABLE ${quote(selectedTable)}` });
+      await post(`/databases/${id}/exec-sql`, { sql: `TRUNCATE TABLE ${ident(selectedTable)}` });
       toast("success", "Table truncated", selectedTable);
       setTruncateOpen(false);
-      void loadRows(selectedTable, "");
+      setPage(0);
+      void loadRows(selectedTable, "", { page: 0 });
     } catch (err) {
       toast("error", "Truncate failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -1126,7 +1221,7 @@ function DbBrowser({ db }: { db: Database }) {
     if (!selectedTable) return;
     setMutBusy(true);
     try {
-      await post(`/databases/${id}/exec-sql`, { sql: `DROP TABLE ${quote(selectedTable)}` });
+      await post(`/databases/${id}/exec-sql`, { sql: `DROP TABLE ${ident(selectedTable)}` });
       toast("success", "Table dropped", selectedTable);
       setDropOpen(false);
       setSelectedTable(null);
@@ -1138,6 +1233,138 @@ function DbBrowser({ db }: { db: Database }) {
       setMutBusy(false);
     }
   };
+
+  /* ── context-menu actions ─────────────────────────────────── */
+  const truncateTableByName = async (name: string) => {
+    setMutBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `TRUNCATE TABLE ${ident(name)}` });
+      toast("success", "Table truncated", name);
+      setTruncateTarget(null);
+      if (selectedTable === name) void loadRows(name, "");
+    } catch (err) {
+      toast("error", "Truncate failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setMutBusy(false);
+    }
+  };
+
+  const dropTableByName = async (name: string) => {
+    setMutBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `DROP TABLE ${ident(name)}` });
+      toast("success", "Table dropped", name);
+      setDropTarget(null);
+      if (selectedTable === name) {
+        setSelectedTable(null);
+        setRows(null);
+        setTableInfo(null);
+      }
+      void loadObjects();
+    } catch (err) {
+      toast("error", "Drop failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setMutBusy(false);
+    }
+  };
+
+  const dropDbByName = async (name: string) => {
+    setMutBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `DROP DATABASE ${ident(name)}` });
+      toast("success", "Database dropped", name);
+      setDropDbTarget(null);
+      void loadObjects();
+    } catch (err) {
+      toast("error", "Drop failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setMutBusy(false);
+    }
+  };
+
+  const createDatabase = async () => {
+    const name = createDbName.trim();
+    if (!name) return;
+    setCreateDbBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `CREATE DATABASE ${ident(name)}` });
+      toast("success", "Database created", name);
+      setCreateDbOpen(false);
+      setCreateDbName("");
+      void loadObjects();
+    } catch (err) {
+      toast("error", "Create failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setCreateDbBusy(false);
+    }
+  };
+
+  /** One column definition per line — lines are joined with commas for valid SQL. */
+  const tableColsSql = () =>
+    createTableColumns.split("\n").map((l) => l.trim()).filter(Boolean).join(",\n");
+
+  const createTable = async () => {
+    const name = createTableName.trim();
+    const cols = tableColsSql();
+    if (!name || !cols) return;
+    setCreateTableBusy(true);
+    try {
+      await post(`/databases/${id}/exec-sql`, { sql: `CREATE TABLE ${ident(name)} (\n${cols}\n)` });
+      toast("success", "Table created", name);
+      setCreateTableOpen(false);
+      setCreateTableName("");
+      setCreateTableColumns("id SERIAL PRIMARY KEY\ncreated_at TIMESTAMPTZ DEFAULT now()");
+      void loadObjects();
+      void selectTable(name);
+    } catch (err) {
+      toast("error", "Create failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setCreateTableBusy(false);
+    }
+  };
+
+  const copyName = (name: string) => {
+    void navigator.clipboard.writeText(name).then(
+      () => toast("success", "Copied", name),
+      () => toast("error", "Copy failed", "Clipboard unavailable"),
+    );
+  };
+
+  /** Select a table from the context menu and open the insert modal with its fresh columns. */
+  const insertIntoTarget = async (name: string) => {
+    await selectTable(name);
+    try {
+      const info = await get<DbTableInfo>(`/databases/${id}/table-info?table=${encodeURIComponent(name)}`);
+      const form: Record<string, string> = {};
+      (info.columns ?? []).forEach((c) => {
+        form[c.name] = "";
+      });
+      setInsertForm(form);
+      setInsertOpen(true);
+    } catch (err) {
+      toast("error", "Failed to load table", err instanceof Error ? err.message : "Unknown error");
+    }
+  };
+
+  const ctxItem = ({
+    icon, label, danger = false, onClick,
+  }: {
+    icon: React.ReactNode; label: string; danger?: boolean; onClick: () => void;
+  }) => (
+    <button
+      onClick={() => {
+        setCtx(null);
+        onClick();
+      }}
+      className={cn(
+        "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[12.5px] transition-colors",
+        danger ? "text-destructive hover:bg-destructive/10" : "text-foreground/85 hover:bg-muted/60",
+      )}
+    >
+      <span className="shrink-0 text-muted-foreground">{icon}</span>
+      {label}
+    </button>
+  );
 
   const currentDb = objects?.databases?.find((d) => d === (db.dbName ?? db.name)) ?? objects?.databases?.[0] ?? "";
   const allTables = objects?.tables ?? [];
@@ -1151,13 +1378,14 @@ function DbBrowser({ db }: { db: Database }) {
   };
 
   const TreeRow = ({
-    label, count, depth, expanded, hasChildren, onClick, active = false, icon,
+    label, count, depth, expanded, hasChildren, onClick, active = false, icon, onContextMenu,
   }: {
     label: string; count?: number; depth: number; expanded?: boolean; hasChildren?: boolean;
-    onClick: () => void; active?: boolean; icon?: React.ReactNode;
+    onClick: () => void; active?: boolean; icon?: React.ReactNode; onContextMenu?: (e: React.MouseEvent) => void;
   }) => (
     <button
       onClick={onClick}
+      onContextMenu={onContextMenu}
       className={cn(
         "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors",
         active ? "bg-primary/10 text-primary" : "text-foreground/85 hover:bg-muted/60",
@@ -1181,6 +1409,8 @@ function DbBrowser({ db }: { db: Database }) {
         <button
           key={t.name}
           onClick={() => void selectTable(t.name)}
+          onContextMenu={(e) => openCtx(e, { kind: "table", name: t.name })}
+          title="Right-click for table actions"
           className={cn(
             "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12.5px] transition-colors",
             selectedTable === t.name ? "bg-primary/10 text-primary" : "text-foreground/85 hover:bg-muted/60",
@@ -1237,7 +1467,7 @@ function DbBrowser({ db }: { db: Database }) {
             <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
           </Button>
         </CardHeader>
-        <CardContent className="space-y-2 p-3">
+        <CardContent className="space-y-2 p-3" onContextMenu={(e) => openCtx(e, { kind: "empty" })}>
           {loading && <Skeleton className="h-40" />}
           {!loading && msg && !objects && <p className="py-2 text-xs text-muted-foreground">{msg}</p>}
           {!loading && objects && (
@@ -1259,6 +1489,7 @@ function DbBrowser({ db }: { db: Database }) {
                         expanded={expanded}
                         active={isCurrent}
                         onClick={() => isCurrent && setExpandedDbs((s) => toggle(s, d))}
+                        onContextMenu={(e) => openCtx(e, { kind: "database", name: d })}
                         icon={isCurrent ? <DatabaseIcon className="size-3.5 shrink-0 text-primary" /> : <DatabaseIcon className="size-3.5 shrink-0 text-muted-foreground" />}
                       />
                       {isCurrent && expanded && (
@@ -1454,6 +1685,7 @@ function DbBrowser({ db }: { db: Database }) {
               </CardHeader>
               <CardContent>
                 {rows && rows.columns.length > 0 ? (
+                  <>
                   <div className="max-h-[420px] overflow-auto rounded-xl border border-border/60">
                     <table className="w-full border-collapse text-[12px]">
                       <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
@@ -1462,12 +1694,27 @@ function DbBrowser({ db }: { db: Database }) {
                           {rows.columns.map((c) => {
                             const kind = colKind(colTypeOf(c));
                             const KindIcon = colKindIcon[kind];
+                            const active = sort?.col === c;
                             return (
-                              <th key={c} className="border-b border-border/60 px-3 py-2 text-left font-medium">
-                                <span className="mr-1.5 inline-flex align-[-2px] text-muted-foreground" title={kind === "num" ? "numeric" : kind === "str" ? "text" : "other"}>
-                                  <KindIcon className="size-3" />
-                                </span>
-                                {c}
+                              <th key={c} className="border-b border-border/60 px-1 py-1.5 text-left">
+                                <button
+                                  onClick={() => toggleSort(c)}
+                                  title={`Sort by ${c}`}
+                                  className={cn(
+                                    "group inline-flex w-full items-center gap-1 rounded px-1.5 py-1 font-medium transition-colors",
+                                    active ? "text-primary" : "text-foreground hover:bg-primary/10",
+                                  )}
+                                >
+                                  <span className="mr-1 inline-flex align-[-2px] text-muted-foreground" title={kind === "num" ? "numeric" : kind === "str" ? "text" : "other"}>
+                                    <KindIcon className="size-3" />
+                                  </span>
+                                  <span className="truncate">{c}</span>
+                                  {active ? (
+                                    sort!.dir === "asc" ? <ArrowUp className="size-3 shrink-0 text-primary" /> : <ArrowDown className="size-3 shrink-0 text-primary" />
+                                  ) : (
+                                    <ChevronsUpDown className="size-3 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" />
+                                  )}
+                                </button>
                               </th>
                             );
                           })}
@@ -1534,6 +1781,36 @@ function DbBrowser({ db }: { db: Database }) {
                       </tbody>
                     </table>
                   </div>
+                  {/* Pagination + page size */}
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-2 text-[11.5px] text-muted-foreground">
+                    <span>
+                      {rows.rows.length === 0
+                        ? `0 of ${totalRows?.toLocaleString() ?? "?"} rows`
+                        : `${(page * pageSize + 1).toLocaleString()}–${(page * pageSize + rows.rows.length).toLocaleString()} of ${totalRows?.toLocaleString() ?? "?"} rows`}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={pageSize}
+                        onChange={(e) => changePageSize(Number(e.target.value))}
+                        title="Rows per page"
+                        className="h-7 rounded-md border border-border/60 bg-background px-1.5 text-[11.5px] text-foreground focus:border-primary/50 focus:outline-none"
+                      >
+                        {[25, 50, 100, 200].map((n) => (
+                          <option key={n} value={n}>{n} / page</option>
+                        ))}
+                      </select>
+                      <Button size="sm" variant="outline" className="h-7 px-2" disabled={page === 0 || rowsLoading} onClick={() => goToPage(page - 1)} title="Previous page">
+                        <ChevronLeft className="size-3.5" />
+                      </Button>
+                      <span className="whitespace-nowrap tabular-nums">
+                        Page {page + 1} of {totalPages}
+                      </span>
+                      <Button size="sm" variant="outline" className="h-7 px-2" disabled={page >= totalPages - 1 || rowsLoading} onClick={() => goToPage(page + 1)} title="Next page">
+                        <ChevronRight className="size-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                  </>
                 ) : (
                   <p className="py-8 text-center text-sm text-muted-foreground">
                     {rowsError ? "Query failed — check the error above." : "Loading rows…"}
@@ -1781,6 +2058,155 @@ function DbBrowser({ db }: { db: Database }) {
         confirmLabel="Drop"
         loading={mutBusy}
       />
+
+      {/* ── Right-click context menu (phpMyAdmin-style) ── */}
+      {ctx && (
+        <div
+          ref={ctxRef}
+          className="fixed z-[100] w-56 overflow-hidden rounded-lg border border-border/70 bg-popover shadow-2xl"
+          style={{ left: ctx.x, top: ctx.y }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="border-b border-border/50 bg-muted/40 px-3 py-2">
+            <p className="truncate font-mono text-[11px] text-muted-foreground">
+              {ctx.kind === "table" && <><Table2 className="mr-1 inline size-3 align-[-1px] text-primary" /> {ctx.name}</>}
+              {ctx.kind === "database" && <><DatabaseIcon className="mr-1 inline size-3 align-[-1px] text-primary" /> {ctx.name}</>}
+              {ctx.kind === "empty" && "Database browser"}
+            </p>
+          </div>
+          <div className="py-1">
+            {ctx.kind === "table" && (
+              <>
+                {ctxItem({ icon: <Play className="size-3.5" />, label: "Browse / Select", onClick: () => void selectTable(ctx.name) })}
+                {ctxItem({ icon: <Plus className="size-3.5" />, label: "Insert row", onClick: () => void insertIntoTarget(ctx.name) })}
+                <div className="my-1 border-t border-border/50" />
+                {ctxItem({ icon: <Eraser className="size-3.5" />, label: "Truncate", onClick: () => setTruncateTarget(ctx.name) })}
+                {ctxItem({ icon: <Trash2 className="size-3.5" />, label: "Drop table", danger: true, onClick: () => setDropTarget(ctx.name) })}
+                <div className="my-1 border-t border-border/50" />
+                {ctxItem({ icon: <Copy className="size-3.5" />, label: "Copy name", onClick: () => copyName(ctx.name) })}
+                {ctxItem({ icon: <Terminal className="size-3.5" />, label: "Run SQL…", onClick: () => { setSqlMsg(null); setSqlText(""); setSqlOpen(true); } })}
+              </>
+            )}
+            {ctx.kind === "database" && (
+              <>
+                {ctxItem({ icon: <RefreshCw className="size-3.5" />, label: "Refresh objects", onClick: () => void loadObjects() })}
+                <div className="my-1 border-t border-border/50" />
+                {ctxItem({ icon: <FolderPlus className="size-3.5" />, label: "Create database", onClick: () => { setCreateDbName(""); setCreateDbOpen(true); } })}
+                {ctxItem({ icon: <Trash2 className="size-3.5" />, label: "Drop database", danger: true, onClick: () => setDropDbTarget(ctx.name) })}
+              </>
+            )}
+            {ctx.kind === "empty" && (
+              <>
+                {ctxItem({ icon: <FolderPlus className="size-3.5" />, label: "Create database", onClick: () => { setCreateDbName(""); setCreateDbOpen(true); } })}
+                {ctxItem({ icon: <FilePlus2 className="size-3.5" />, label: "Create table", onClick: () => { setCreateTableName(""); setCreateTableOpen(true); } })}
+                <div className="my-1 border-t border-border/50" />
+                {ctxItem({ icon: <RefreshCw className="size-3.5" />, label: "Refresh objects", onClick: () => void loadObjects() })}
+                {ctxItem({ icon: <Terminal className="size-3.5" />, label: "Run SQL…", onClick: () => { setSqlMsg(null); setSqlText(""); setSqlOpen(true); } })}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={truncateTarget !== null}
+        onClose={() => setTruncateTarget(null)}
+        onConfirm={() => truncateTarget && void truncateTableByName(truncateTarget)}
+        title="Truncate table"
+        description="This removes ALL rows from the table. The table structure is kept."
+        resourceName={truncateTarget ?? ""}
+        confirmLabel="Truncate"
+        loading={mutBusy}
+      />
+      <ConfirmDialog
+        open={dropTarget !== null}
+        onClose={() => setDropTarget(null)}
+        onConfirm={() => dropTarget && void dropTableByName(dropTarget)}
+        title="Drop table"
+        description="This permanently deletes the table and all its data."
+        resourceName={dropTarget ?? ""}
+        confirmLabel="Drop"
+        loading={mutBusy}
+      />
+      <ConfirmDialog
+        open={dropDbTarget !== null}
+        onClose={() => setDropDbTarget(null)}
+        onConfirm={() => dropDbTarget && void dropDbByName(dropDbTarget)}
+        title="Drop database"
+        description={`This permanently deletes the database ${ident(dropDbTarget ?? "")} and everything inside it.`}
+        resourceName={dropDbTarget ?? ""}
+        confirmLabel="Drop"
+        loading={mutBusy}
+      />
+
+      {/* Create database modal */}
+      <Modal isOpen={createDbOpen} onClose={() => !createDbBusy && setCreateDbOpen(false)} maxWidth="440px" showCloseButton={!createDbBusy}>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold text-foreground">Create database</h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">Creates a new database with root access on this server.</p>
+          <div className="mt-4 space-y-1.5">
+            <Label className="text-[11.5px] font-medium text-muted-foreground">Database Name</Label>
+            <Input
+              autoFocus
+              value={createDbName}
+              onChange={(e) => setCreateDbName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void createDatabase()}
+              placeholder="e.g. analytics_db"
+              className="h-9 font-mono text-[12.5px]"
+            />
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCreateDbOpen(false)} disabled={createDbBusy}>
+              Cancel
+            </Button>
+            <Button onClick={() => void createDatabase()} disabled={createDbBusy || !createDbName.trim()}>
+              {createDbBusy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />} Create
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Create table modal */}
+      <Modal isOpen={createTableOpen} onClose={() => !createTableBusy && setCreateTableOpen(false)} maxWidth="520px" showCloseButton={!createTableBusy}>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold text-foreground">Create table</h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">One column definition per line — commas are added automatically.</p>
+          <div className="mt-4 space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-[11.5px] font-medium text-muted-foreground">Table Name</Label>
+              <Input
+                autoFocus
+                value={createTableName}
+                onChange={(e) => setCreateTableName(e.target.value)}
+                placeholder="e.g. users"
+                className="h-9 font-mono text-[12.5px]"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11.5px] font-medium text-muted-foreground">
+                Columns <span className="text-[10.5px] opacity-70">(SQL definitions)</span>
+              </Label>
+              <textarea
+                value={createTableColumns}
+                onChange={(e) => setCreateTableColumns(e.target.value)}
+                spellCheck={false}
+                className="h-28 w-full resize-y rounded-xl border border-border/60 bg-background p-3 font-mono text-[12px] text-foreground placeholder:text-muted-foreground/50 focus:border-primary/50 focus:outline-none"
+              />
+            </div>
+            <pre className="overflow-auto rounded-lg border border-border/50 bg-muted/30 p-2.5 font-mono text-[11px] text-muted-foreground">
+              {`CREATE TABLE ${ident(createTableName.trim() || "table")} (\n${tableColsSql() || "…"}\n);`}
+            </pre>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCreateTableOpen(false)} disabled={createTableBusy}>
+              Cancel
+            </Button>
+            <Button onClick={() => void createTable()} disabled={createTableBusy || !createTableName.trim() || !createTableColumns.trim()}>
+              {createTableBusy ? <Loader2 className="size-3.5 animate-spin" /> : <FilePlus2 className="size-3.5" />} Create
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

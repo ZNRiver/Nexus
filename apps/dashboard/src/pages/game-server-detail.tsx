@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Terminal, Play, Square, RotateCw, ExternalLink, Globe, FolderTree, Database as DatabaseIcon,
+  Terminal, Play, Square, RotateCw, ExternalLink, Globe, FolderTree,
   CalendarClock, Users, Archive, Network as NetworkIcon, Rocket, Settings as SettingsIcon,
   Activity as ActivityIcon, Loader2, Trash2, Radio, Timer, Cpu, MemoryStick, HardDrive,
   ArrowDownToLine, ArrowUpFromLine, FolderPlus, FilePlus, Upload, FileText, MoreHorizontal,
@@ -25,12 +25,11 @@ import { formatBytes, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { GameServer, Server, SystemMetrics } from "@nexus/types";
 
-type TabKey = "console" | "files" | "databases" | "schedules" | "users" | "backups" | "network" | "startup" | "settings" | "activity";
+type TabKey = "console" | "files" | "schedules" | "users" | "backups" | "network" | "startup" | "settings" | "activity";
 
 const TABS: TabDef<TabKey>[] = [
   { key: "console", label: "Console", icon: Terminal },
   { key: "files", label: "Files", icon: FolderTree },
-  { key: "databases", label: "Databases", icon: DatabaseIcon },
   { key: "schedules", label: "Schedules", icon: CalendarClock },
   { key: "users", label: "Users", icon: Users },
   { key: "backups", label: "Backups", icon: Archive },
@@ -404,17 +403,6 @@ export function GameServerDetailPage() {
         {tab === "backups" && <BackupsTab game={game} />}
         {tab === "network" && <NetworkTab game={game} />}
         {tab === "startup" && <StartupTab game={game} />}
-        {tab === "databases" && (
-          <Card>
-            <CardContent className="py-16 text-center">
-              <DatabaseIcon className="mx-auto size-10 text-muted-foreground/50" />
-              <h3 className="mt-4 text-sm font-semibold">Databases</h3>
-              <p className="mx-auto mt-1 max-w-sm text-[13px] text-muted-foreground">
-                Game databases are managed from the Databases section — create one from there and link it to this server.
-              </p>
-            </CardContent>
-          </Card>
-        )}
         {tab === "users" && (
           <Card>
             <CardContent className="py-16 text-center">

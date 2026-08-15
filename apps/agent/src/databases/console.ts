@@ -114,7 +114,7 @@ export async function runDbQuery(
     case "MARIADB": {
       const res = await docker.exec(containerId, [
         "sh", "-c",
-        `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(sql)}`,
+        `MYSQL_PWD=${shquote(password ?? "")} mysql -u ${shquote(user)} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(sql)}`,
       ], { timeoutMs: 60000 });
       if (res.exitCode !== 0 && /ERROR/i.test(res.output)) {
         throw new Error(res.output.trim().split("\n").filter((l) => /ERROR/i.test(l)).join("\n") || `mysql failed (exit ${res.exitCode})`);
@@ -163,8 +163,8 @@ export async function getDbSchema(
       const tablesSql = `SHOW TABLES`;
       const colsSql = `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION`;
       const [tRes, cRes] = await Promise.all([
-        docker.exec(containerId, ["sh", "-c", `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(tablesSql)}`], { timeoutMs: 60000 }),
-        docker.exec(containerId, ["sh", "-c", `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(colsSql)}`], { timeoutMs: 60000 }),
+        docker.exec(containerId, ["sh", "-c", `MYSQL_PWD=${shquote(password ?? "")} mysql -u ${shquote(user)} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(tablesSql)}`], { timeoutMs: 60000 }),
+        docker.exec(containerId, ["sh", "-c", `MYSQL_PWD=${shquote(password ?? "")} mysql -u ${shquote(user)} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(colsSql)}`], { timeoutMs: 60000 }),
       ]);
       const tables = tRes.output.split("\n").map((l) => l.trim()).filter(Boolean);
       const colMap = new Map<string, { name: string; type: string }[]>();
@@ -213,7 +213,7 @@ async function mysqlBatch(
 ): Promise<string> {
   const res = await docker.exec(containerId, [
     "sh", "-c",
-    `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(db)} --batch --raw -e ${shquote(sql)}`,
+    `MYSQL_PWD=${shquote(password ?? "")} mysql -u ${shquote(user)} -h 127.0.0.1 ${shquote(db)} --batch --raw -e ${shquote(sql)}`,
   ], { timeoutMs: 60000 });
   if (res.exitCode !== 0) {
     throw new Error(res.output.trim().split("\n").filter((l) => /ERROR/i.test(l)).join("\n") || `mysql failed (exit ${res.exitCode})`);
@@ -223,6 +223,11 @@ async function mysqlBatch(
 
 function splitLines(out: string): string[] {
   return out.replace(/\r/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** Drop the header row that `mysql --batch` always prints as its first line. */
+function stripHeader(out: string): string {
+  return splitLines(out).slice(1).join("\n");
 }
 
 function splitTab(line: string): string[] {
@@ -296,24 +301,24 @@ export async function getDbObjects(
         mysqlBatch(docker, containerId, user, password, name, `SELECT VERSION()`),
         mysqlBatch(docker, containerId, user, password, name, `SELECT DISTINCT User FROM mysql.user ORDER BY User`),
       ]);
-      const databases = splitLines(dbsRaw ?? "").filter((d) => !/^(information_schema|performance_schema|mysql|sys)$/.test(d));
-      const tables = (splitLines(tablesRaw ?? "")).map((l) => {
+      const databases = splitLines(stripHeader(dbsRaw ?? "")).filter((d) => !/^(information_schema|performance_schema|mysql|sys)$/.test(d));
+      const tables = (splitLines(stripHeader(tablesRaw ?? ""))).map((l) => {
         const [t, sz] = splitTab(l);
         const kb = Number(sz);
         return { name: t ?? "", size: Number.isFinite(kb) && kb > 0 ? `${Math.round(kb)}K` : undefined };
       });
-      const version = (verRaw ?? "").split(/\s+/).slice(0, 2).join(" ") || undefined;
+      const version = stripHeader(verRaw ?? "").split(/\s+/).slice(0, 2).join(" ") || undefined;
       return {
         ...empty,
         databases,
         tables,
-        views: splitLines(viewsRaw ?? ""),
-        indexes: splitLines(indexesRaw ?? ""),
-        procedures: splitLines(procsRaw ?? ""),
+        views: splitLines(stripHeader(viewsRaw ?? "")),
+        indexes: splitLines(stripHeader(indexesRaw ?? "")),
+        procedures: splitLines(stripHeader(procsRaw ?? "")),
         sequences: [],
-        triggers: splitLines(trgRaw ?? ""),
-        events: splitLines(evtRaw ?? ""),
-        roles: splitLines(rolesRaw ?? ""),
+        triggers: splitLines(stripHeader(trgRaw ?? "")),
+        events: splitLines(stripHeader(evtRaw ?? "")),
+        roles: splitLines(stripHeader(rolesRaw ?? "")),
         version,
       };
     }
@@ -385,16 +390,16 @@ export async function getDbTableInfo(
         mysqlBatch(docker, containerId, user, password, name, `SELECT TRIGGER_NAME, EVENT_MANIPULATION, ACTION_TIMING FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND EVENT_OBJECT_TABLE = '${t}'`),
         mysqlBatch(docker, containerId, user, password, name, `SELECT INDEX_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX), NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${t}' GROUP BY INDEX_NAME, NON_UNIQUE`),
       ]);
-      const columns = splitLines(colsRaw ?? "").map((l) => {
+      const columns = splitLines(stripHeader(colsRaw ?? "")).map((l) => {
         const [c, ty, nul, key, def] = splitTab(l);
         return { name: c ?? "", type: ty ?? "", nullable: (nul ?? "") === "YES", key: key ?? "", defaultValue: def || null };
       });
-      const constraints = splitLines(consRaw ?? "").map((l) => {
+      const constraints = splitLines(stripHeader(consRaw ?? "")).map((l) => {
         const [cn, ct] = splitTab(l);
         return { name: cn ?? "", type: ct ?? "" };
       });
       const fkMap = new Map<string, { columns: string[]; references: string }>();
-      for (const l of splitLines(fkRaw ?? "")) {
+      for (const l of splitLines(stripHeader(fkRaw ?? ""))) {
         const [cn, col, refT, refC] = splitTab(l);
         if (!cn) continue;
         const cur = fkMap.get(cn) ?? { columns: [], references: "" };
@@ -403,11 +408,11 @@ export async function getDbTableInfo(
         fkMap.set(cn, cur);
       }
       const foreignKeys = [...fkMap.entries()].map(([name, v]) => ({ name, columns: v.columns.join(", "), references: v.references }));
-      const triggers = splitLines(trgRaw ?? "").map((l) => {
+      const triggers = splitLines(stripHeader(trgRaw ?? "")).map((l) => {
         const [tn, ev, ti] = splitTab(l);
         return { name: tn ?? "", event: ev ?? "", timing: ti ?? "" };
       });
-      const indexes = splitLines(idxRaw ?? "").map((l) => {
+      const indexes = splitLines(stripHeader(idxRaw ?? "")).map((l) => {
         const [in_, cols, nu] = splitTab(l);
         return { name: in_ ?? "", columns: cols ?? "", unique: (nu ?? "1") === "0" };
       });
@@ -418,9 +423,10 @@ export async function getDbTableInfo(
   }
 }
 
-/** Quote a SQL identifier (column/table name). */
-function sqlIdent(value: string): string {
-  return '"' + value.replace(/"/g, "") + '"';
+/** Quote a SQL identifier (column/table name). MySQL/MariaDB use backticks,
+ * everything else (PostgreSQL) uses double quotes. */
+function sqlIdent(value: string, quoteChar: "`" | '"' = '"'): string {
+  return quoteChar + value.split(quoteChar).join("") + quoteChar;
 }
 
 /** Render a value as a SQL literal (safe escaping). Empty string / "NULL"
@@ -440,10 +446,10 @@ function sqlLiteral(value: string | number | null): string {
 }
 
 /** Build a WHERE clause from { column: value } pairs (AND of equals, NULL-aware). */
-function buildWhere(where: Record<string, string | number | null>): string {
+function buildWhere(where: Record<string, string | number | null>, quoteChar: "`" | '"' = '"'): string {
   const parts = Object.entries(where)
     .filter(([k]) => k.trim().length > 0)
-    .map(([k, v]) => (sqlLiteral(v) === "NULL" ? `${sqlIdent(k)} IS NULL` : `${sqlIdent(k)} = ${sqlLiteral(v)}`));
+    .map(([k, v]) => (sqlLiteral(v) === "NULL" ? `${sqlIdent(k, quoteChar)} IS NULL` : `${sqlIdent(k, quoteChar)} = ${sqlLiteral(v)}`));
   if (parts.length === 0) throw new Error("where is required for update/delete");
   return parts.join(" AND ");
 }
@@ -460,7 +466,8 @@ export async function runDbWrite(
   const { type, containerId, name, username, password, table, operation, data, where } = payload;
   if (!/^[A-Za-z0-9_.-]+$/.test(table)) throw new Error("invalid table name");
   const user = username ?? "root";
-  const t = sqlIdent(table);
+  const idq: "`" | '"' = type === "MYSQL" || type === "MARIADB" ? "`" : '"';
+  const t = sqlIdent(table, idq);
 
   let sql: string;
   switch (operation) {
@@ -469,7 +476,7 @@ export async function runDbWrite(
       // (like leaving the field empty in phpMyAdmin).
       const entries = Object.entries(data).filter(([k, v]) => k.trim().length > 0 && sqlLiteral(v) !== "NULL");
       if (entries.length === 0) throw new Error("insert requires at least one column with a value");
-      const cols = entries.map(([k]) => sqlIdent(k)).join(", ");
+      const cols = entries.map(([k]) => sqlIdent(k, idq)).join(", ");
       const vals = entries.map(([, v]) => sqlLiteral(v)).join(", ");
       sql = `INSERT INTO ${t} (${cols}) VALUES (${vals});`;
       break;
@@ -477,13 +484,13 @@ export async function runDbWrite(
     case "update": {
       const sets = Object.entries(data)
         .filter(([k]) => k.trim().length > 0)
-        .map(([k, v]) => `${sqlIdent(k)} = ${sqlLiteral(v)}`);
+        .map(([k, v]) => `${sqlIdent(k, idq)} = ${sqlLiteral(v)}`);
       if (sets.length === 0) throw new Error("update requires at least one column");
-      sql = `UPDATE ${t} SET ${sets.join(", ")} WHERE ${buildWhere(where ?? {})};`;
+      sql = `UPDATE ${t} SET ${sets.join(", ")} WHERE ${buildWhere(where ?? {}, idq)};`;
       break;
     }
     case "delete": {
-      sql = `DELETE FROM ${t} WHERE ${buildWhere(where ?? {})};`;
+      sql = `DELETE FROM ${t} WHERE ${buildWhere(where ?? {}, idq)};`;
       break;
     }
     default:
@@ -513,9 +520,14 @@ export async function runDbWrite(
     }
     case "MYSQL":
     case "MARIADB": {
-      const out = await exec(["sh", "-c", `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(sql)}`]);
-      const m = out.match(/Rows matched: (\d+)/i) || out.match(/(\d+) row\(s\) (affected|changed)/i);
-      return { message: (m?.[0] ?? out.trim()).slice(0, 200), affected: m ? Number(m[1]) : 0 };
+      // mysql is silent for DML when output is not a TTY, so run ROW_COUNT()
+      // in the same connection to learn how many rows were affected.
+      const out = await exec(["sh", "-c", `MYSQL_PWD=${shquote(password ?? "")} mysql -u ${shquote(user)} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(`${sql}\nSELECT ROW_COUNT() AS _rc`)}`]);
+      const lines = splitLines(out);
+      const last = Number(lines[lines.length - 1]);
+      const affected = Number.isFinite(last) && lines.length > 0 ? last : 0;
+      const op = operation.toUpperCase();
+      return { message: `${op} — ${affected} row(s) affected`, affected };
     }
     default:
       throw new Error(`write is not available for ${type} — supported: PostgreSQL, MySQL, MariaDB`);
@@ -552,7 +564,7 @@ export async function runDbExec(
     case "MARIADB": {
       const res = await docker.exec(containerId, [
         "sh", "-c",
-        `mysql -u ${shquote(user)} -p${shquote(password ?? "")} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(s)}`,
+        `MYSQL_PWD=${shquote(password ?? "")} mysql -u ${shquote(user)} -h 127.0.0.1 ${shquote(name)} --batch --raw -e ${shquote(s)}`,
       ], { timeoutMs: 60000 });
       if (res.exitCode !== 0) {
         throw new Error(res.output.trim().split("\n").filter((l) => /ERROR/i.test(l)).join("\n") || `mysql failed (exit ${res.exitCode})`);
