@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Check, Loader2, Boxes, Server as ServerIcon, GitBranch, FileCode2, Rocket, SlidersHorizontal, ListChecks } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Loader2, Boxes, Server as ServerIcon, GitBranch, FileCode2, Rocket, SlidersHorizontal, ListChecks, CircleHelp } from "lucide-react";
 import { get, post } from "@/lib/api";
+import { GitLogo } from "@/components/git-logos";
 import { OperationLogPanel } from "@/components/operation-log-panel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ export function NewApplicationPage() {
     description: "",
     projectId: "",
     serverId: "",
+    provider: "",
     repository: "",
     branch: "main",
     deploymentMethod: "DOCKERFILE" as "DOCKERFILE" | "COMPOSE",
@@ -65,6 +67,17 @@ export function NewApplicationPage() {
 
   const { data: servers } = useQuery({ queryKey: ["servers"], queryFn: () => get<{ items: Server[] }>("/servers") });
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: () => get<{ items: Project[] }>("/projects") });
+  const { data: gitProviders } = useQuery({ queryKey: ["git-providers"], queryFn: () => get<{ items: { id: string; provider: string; name: string }[] }>("/git-providers") });
+
+  // Repositories of the selected provider — only when the provider is a connected Git account.
+  const gitKind = form.provider.toLowerCase();
+  const connectedGitAccount = gitProviders?.items.find((p) => p.provider === gitKind);
+  const reposQ = useQuery({
+    queryKey: ["git-repos", gitKind],
+    queryFn: () => get<{ items: { name: string; url: string; private: boolean; defaultBranch: string | null }[] }>(`/git-providers/${gitKind}/repos`),
+    enabled: !!connectedGitAccount && ["github", "gitlab", "bitbucket", "gitea"].includes(gitKind),
+    retry: false,
+  });
 
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const setEnvRow = (i: number, patch: Partial<EnvRow>) => setEnv((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -90,6 +103,7 @@ export function NewApplicationPage() {
         description: form.description || undefined,
         projectId: form.projectId || undefined,
         serverId: form.serverId,
+        provider: form.provider || undefined,
         repository: form.repository,
         branch: form.branch,
         deploymentMethod: form.deploymentMethod,
@@ -180,9 +194,62 @@ export function NewApplicationPage() {
       content: (
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Git repository</Label>
+            <Label>Provider</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              {["Github", "Gitlab", "Bitbucket", "Gitea", "Docker", "Git", "Drop"].map((p) => {
+                const active = form.provider === p;
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => set({ provider: active ? "" : p })}
+                    className={cn(
+                      "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                      active ? "border-primary/50 bg-primary/10 text-primary" : "border-border/70 text-muted-foreground hover:border-border hover:bg-foreground/[0.05] hover:text-foreground",
+                    )}
+                  >
+                    {active && <Check className="size-3" />}
+                    {p}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {connectedGitAccount && (
+            <div className="space-y-1.5">
+              <Label>{gitKind[0].toUpperCase() + gitKind.slice(1)} Account</Label>
+              <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-sm">
+                <GitLogo type={gitKind as never} className="size-4" />
+                <span className="font-medium text-foreground">{connectedGitAccount.name}</span>
+                <span className="text-muted-foreground">· connected</span>
+              </div>
+            </div>
+          )}
+
+          {connectedGitAccount && reposQ.data?.items.length ? (
+            <div className="space-y-1.5">
+              <Label>Repository</Label>
+              <CustomSelect
+                value={form.repository}
+                options={reposQ.data.items.map((r) => ({
+                  value: r.url,
+                  label: r.name,
+                  description: `${r.private ? "private" : "public"}${r.defaultBranch ? ` · ${r.defaultBranch}` : ""}`,
+                }))}
+                onChange={(url) => set({ repository: url })}
+                placeholder={reposQ.isFetching ? "Loading repositories…" : "Select a repository"}
+              />
+            </div>
+          ) : null}
+
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <Label>Git repository URL</Label>
+              <CircleHelp className="size-3.5 text-muted-foreground/60" />
+            </div>
             <Input value={form.repository} onChange={(e) => set({ repository: e.target.value })} placeholder="https://github.com/org/repo.git" />
-            <p className="text-[11px] text-muted-foreground">GitHub, GitLab, Bitbucket or any public/private Git URL.</p>
+            <p className="text-[11px] text-muted-foreground">Pick from the list above or paste any public/private Git URL. Private repos clone with your connected account's token.</p>
           </div>
           <div className="space-y-1.5">
             <Label>Branch</Label>

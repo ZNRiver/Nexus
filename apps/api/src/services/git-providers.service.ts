@@ -6,6 +6,23 @@ export type GitProviderType = "github" | "gitlab" | "bitbucket" | "gitea";
 
 export const GIT_PROVIDERS: GitProviderType[] = ["github", "gitlab", "bitbucket", "gitea"];
 
+/**
+ * Resolve which connected provider should authenticate a repository.
+ * Accepts the stored provider value (e.g. "Github") case-insensitively and
+ * falls back to inferring the provider from the repository URL when the
+ * provider was never set on the application.
+ */
+export function normalizeGitProvider(provider: string | null | undefined, repository?: string | null): GitProviderType | null {
+  const p = (provider ?? "").toLowerCase();
+  if ((GIT_PROVIDERS as string[]).includes(p)) return p as GitProviderType;
+  const u = (repository ?? "").toLowerCase();
+  if (u.includes("github")) return "github";
+  if (u.includes("gitlab")) return "gitlab";
+  if (u.includes("bitbucket")) return "bitbucket";
+  if (u.includes("gitea")) return "gitea";
+  return null;
+}
+
 export interface GitProviderRow {
   id: string;
   provider: GitProviderType;
@@ -32,6 +49,21 @@ const TEST_ENDPOINTS: Record<GitProviderType, { url: string; headers: (token: st
   bitbucket: { url: "https://api.bitbucket.org/2.0/user", headers: (t) => ({ Authorization: `Basic ${Buffer.from(`x-token-auth:${t}`).toString("base64")}` }) },
   gitea: { url: "https://gitea.com/api/v1/user", headers: (t) => ({ Authorization: `token ${t}` }) },
 };
+
+/** Repository list endpoints — same auth style as TEST_ENDPOINTS. */
+const REPO_ENDPOINTS: Record<GitProviderType, { url: string; headers: (token: string) => Record<string, string> }> = {
+  github: { url: "https://api.github.com/user/repos?per_page=100&sort=updated", headers: (t) => ({ Authorization: `Bearer ${t}`, "User-Agent": "nexus" }) },
+  gitlab: { url: "https://gitlab.com/api/v4/projects?membership=true&per_page=100&simple=true", headers: (t) => ({ "PRIVATE-TOKEN": t }) },
+  bitbucket: { url: "https://api.bitbucket.org/2.0/repositories?role=member&pagelen=100", headers: (t) => ({ Authorization: `Basic ${Buffer.from(`x-token-auth:${t}`).toString("base64")}` }) },
+  gitea: { url: "https://gitea.com/api/v1/user/repos?limit=100", headers: (t) => ({ Authorization: `token ${t}` }) },
+};
+
+export interface GitRepo {
+  name: string;
+  url: string;
+  private: boolean;
+  defaultBranch: string | null;
+}
 
 export class GitProvidersService {
   constructor(
@@ -115,6 +147,29 @@ export class GitProvidersService {
    * account handle/name reported by the provider (e.g. `octocat`) or null when
    * the token is invalid / the provider is unreachable.
    */
+  /**
+   * List the connected account's repositories using the stored token.
+   * Returns a normalized list with clone URLs ready for deployments.
+   */
+  async listRepos(provider: GitProviderType): Promise<GitRepo[]> {
+    const token = await this.tokenFor(provider);
+    if (!token) throw errors.notFound(`No ${provider} account connected — connect it in Git Providers first`);
+    const ep = REPO_ENDPOINTS[provider];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(ep.url, { headers: ep.headers(token), signal: controller.signal });
+      if (!res.ok) throw errors.serverError(`Could not list ${provider} repositories (HTTP ${res.status})`);
+      const body = await res.json().catch(() => ({})) as never;
+      return normalizeRepos(provider, body);
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw errors.serverError(`Timed out talking to ${provider}`);
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async testToken(provider: GitProviderType, token: string): Promise<{ ok: boolean; account?: string; message?: string }> {
     if (!GIT_PROVIDERS.includes(provider)) return { ok: false, message: "Unknown provider" };
     const ep = TEST_ENDPOINTS[provider];
@@ -134,6 +189,28 @@ export class GitProvidersService {
       return { ok: false, message: `Could not reach ${provider} (${message})` };
     }
   }
+}
+
+function normalizeRepos(provider: GitProviderType, body: never): GitRepo[] {
+  if (provider === "bitbucket") {
+    const values = (body as { values?: { full_name?: string; is_private?: boolean; mainbranch?: { name?: string } | null; clone?: { name?: string; href?: string }[] }[] }).values ?? [];
+    return values.map((v) => {
+      const httpsClone = (v.clone ?? []).find((c) => c.name === "https");
+      return {
+        name: v.full_name ?? "",
+        url: httpsClone?.href ?? "",
+        private: !!v.is_private,
+        defaultBranch: v.mainbranch?.name ?? null,
+      };
+    }).filter((r) => r.name && r.url);
+  }
+  const list = (body as { full_name?: string; clone_url?: string; http_url_to_repo?: string; private?: boolean; visibility?: string; default_branch?: string | null }[]);
+  return list.map((r) => ({
+    name: r.full_name ?? r.http_url_to_repo ?? "",
+    url: r.clone_url ?? r.http_url_to_repo ?? "",
+    private: !!r.private || (r.visibility ?? "") === "private",
+    defaultBranch: r.default_branch ?? null,
+  })).filter((r) => r.name && r.url);
 }
 
 function maskToken(encrypted: string): string {

@@ -46,6 +46,13 @@ export function registerGitProviderRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: result.ok, ...result });
   });
 
+  app.get("/api/v1/git-providers/:provider/repos", requireAuth, requirePermission("settings.read"), async (c) => {
+    const provider = (c.req.param("provider") ?? "").toLowerCase() as never;
+    if (!["github", "gitlab", "bitbucket", "gitea"].includes(provider)) throw errors.validation({ provider: "Unknown provider" });
+    const items = await providers.listRepos(provider);
+    return c.json({ success: true, items });
+  });
+
   app.patch("/api/v1/git-providers/:id", requireAuth, requirePermission("settings.write"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ name: z.string().min(1).optional(), token: z.string().min(1).optional() }).safeParse(body);

@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/toast";
+import { GitLogo, type GitProviderKind } from "@/components/git-logos";
 
-type Provider = "github" | "gitlab" | "bitbucket" | "gitea";
+type Provider = GitProviderKind;
 
 interface GitProvider {
   id: string;
@@ -88,10 +89,10 @@ export function GitProvidersPage() {
                 return (
                   <div key={p.id} className="flex items-center gap-3 rounded-xl border border-border/60 bg-card/60 px-4 py-3 transition-colors hover:border-border">
                     <span
-                      className="flex size-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold uppercase"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-lg"
                       style={{ background: meta.bg, color: meta.fg }}
                     >
-                      {meta.label.slice(0, 2)}
+                      <GitLogo type={p.provider} className="size-4.5" />
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-foreground">{p.name}</p>
@@ -141,10 +142,10 @@ export function GitProvidersPage() {
                     }`}
                   >
                     <span
-                      className="flex size-9 items-center justify-center rounded-lg text-[12px] font-bold uppercase shadow-sm transition-transform duration-200 group-hover:scale-110"
+                      className="flex size-9 items-center justify-center rounded-lg shadow-sm transition-transform duration-200 group-hover:scale-110"
                       style={{ background: p.bg, color: p.fg, boxShadow: `0 0 0 1px ${p.ring}` }}
                     >
-                      {p.label.slice(0, 2)}
+                      <GitLogo type={p.key} className="size-5" />
                     </span>
                     <span className="flex items-center gap-1.5 text-foreground">
                       {p.label}
@@ -238,10 +239,10 @@ function ConnectModal({
       <div className="p-6">
         <div className="mb-6 flex items-center gap-3">
           <span
-            className="flex size-10 items-center justify-center rounded-xl text-[13px] font-bold uppercase shadow-sm"
+            className="flex size-10 items-center justify-center rounded-xl shadow-sm"
             style={{ background: meta.bg, color: meta.fg, boxShadow: `0 0 0 1px ${meta.ring}` }}
           >
-            {meta.label.slice(0, 2)}
+            <GitLogo type={provider} className="size-6" />
           </span>
           <div>
             <h2 className="text-base font-semibold text-foreground">

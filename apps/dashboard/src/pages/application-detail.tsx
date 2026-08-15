@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Globe, Rocket, RefreshCw, Wrench, Play, Terminal, Eye, EyeOff, KeyRound, Trash2, Plus, Loader2,
@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
 import { durationMs, timeAgo, shortId, formatBytes, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { GitLogo } from "@/components/git-logos";
 import type { ApplicationWithExtras, Backup, Deployment, DeploymentLogEntry, Domain, EnvironmentVariable } from "@nexus/types";
 
 type TabKey = "general" | "environment" | "domains" | "deployments" | "logs" | "backups" | "settings";
@@ -141,6 +142,22 @@ export function ApplicationDetailPage() {
   });
 
   const latestDeployment = data?.deployments?.[0];
+
+  // Connected Git provider + its repositories (for the Provider tab select).
+  // Computed before the loading guard so the queries can run for both states.
+  const earlyProviderName: Provider = (data?.application?.provider as Provider | null | undefined) ?? detectProvider(provider?.repository ?? data?.application?.repository ?? "");
+  const { data: gitProviders } = useQuery({
+    queryKey: ["git-providers"],
+    queryFn: () => get<{ items: { id: string; provider: string; name: string }[] }>("/git-providers"),
+  });
+  const activeGitProvider = (["github", "gitlab", "bitbucket", "gitea"] as const).find((p) => p === earlyProviderName.toLowerCase());
+  const connectedGitAccount = activeGitProvider ? gitProviders?.items.find((p) => p.provider === activeGitProvider) : undefined;
+  const reposQ = useQuery({
+    queryKey: ["git-repos", activeGitProvider],
+    queryFn: () => get<{ items: { name: string; url: string; private: boolean; defaultBranch: string | null }[] }>(`/git-providers/${activeGitProvider}/repos`),
+    enabled: !!activeGitProvider && !!connectedGitAccount,
+    retry: false,
+  });
 
   // Deployment logs for the active/failed deployment.
   const { data: depLogs } = useQuery({
@@ -701,8 +718,41 @@ export function ApplicationDetailPage() {
                 </div>
                 {provider && (
                   <>
+                    {activeGitProvider && (
+                      <div className="space-y-1.5">
+                        <Label className="text-[13px]">{activeGitProvider[0].toUpperCase() + activeGitProvider.slice(1)} Account</Label>
+                        {connectedGitAccount ? (
+                          <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-sm">
+                            <GitLogo type={activeGitProvider} className="size-4" />
+                            <span className="font-medium text-foreground">{connectedGitAccount.name}</span>
+                            <span className="text-muted-foreground">· connected</span>
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                            No {activeGitProvider} account connected — add one in{" "}
+                            <Link to="/git-providers" className="text-primary underline-offset-2 hover:underline">Git Providers</Link>{" "}
+                            to clone private repositories.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {activeGitProvider && reposQ.data?.items.length ? (
+                      <div className="space-y-1.5">
+                        <Label className="text-[13px]">Repository</Label>
+                        <CustomSelect
+                          value={provider.repository}
+                          options={reposQ.data.items.map((r) => ({
+                            value: r.url,
+                            label: r.name,
+                            description: `${r.private ? "private" : "public"}${r.defaultBranch ? ` · ${r.defaultBranch}` : ""}`,
+                          }))}
+                          onChange={(url) => setProvider({ ...provider, repository: url })}
+                          placeholder={reposQ.isFetching ? "Loading repositories…" : "Select a repository"}
+                        />
+                      </div>
+                    ) : null}
                     <div className="space-y-1.5">
-                      <Label className="text-[13px]">Repository</Label>
+                      <Label className="text-[13px]">Repository URL</Label>
                       <Input className="font-mono" value={provider.repository} onChange={(e) => setProvider({ ...provider, repository: e.target.value })} placeholder="https://github.com/org/repo.git" />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
