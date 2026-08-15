@@ -103,10 +103,10 @@ export function NetworksPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{n.name}</p>
                   <p className="truncate text-[11px] text-muted-foreground">
-                    {n.driver} · {n.scope} · {n.subnet ?? "no subnet"} · {n.internal ? "internal · " : ""}{n.containers.length} container(s)
+                    {n.driver} · {n.scope} · {n.subnet ?? "no subnet"} · {n.internal ? "internal · " : ""}{(n.containers ?? []).length} container(s)
                   </p>
                 </div>
-                {n.containers.length === 0 ? (
+                {(n.containers ?? []).length === 0 ? (
                   <Button size="sm" variant="ghost" onClick={() => setToRemove(n)} className="shrink-0 text-muted-foreground hover:text-destructive">
                     <Trash2 className="size-4" />
                   </Button>

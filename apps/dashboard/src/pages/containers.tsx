@@ -105,7 +105,7 @@ export function ContainersPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{c.name}</p>
                   <p className="truncate text-[11px] text-muted-foreground">
-                    {c.image} · {shortId(c.id)} · {c.ports.map((p) => (p.publicPort ? `${p.publicPort}:${p.privatePort}` : `${p.privatePort}`)).join(", ") || "no ports"} · {timeAgo(c.created)}
+                    {c.image} · {shortId(c.id)} · {(c.ports ?? []).map((p) => (p.publicPort ? `${p.publicPort}:${p.privatePort}` : `${p.privatePort}`)).join(", ") || "no ports"} · {timeAgo(c.created)}
                   </p>
                   {c.cpuPercent != null && (
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
@@ -123,7 +123,7 @@ export function ContainersPage() {
                     <Terminal className="size-3.5" />
                   </Button>
                 </div>
-                <StatusBadge status={c.state.toUpperCase()} className="shrink-0" />
+                <StatusBadge status={(c.state ?? "unknown").toUpperCase()} className="shrink-0" />
               </div>
             ))}
           </div>

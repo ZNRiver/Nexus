@@ -102,15 +102,15 @@ export function VolumesPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{v.name}</p>
                   <p className="truncate text-[11px] text-muted-foreground">
-                    {v.driver} · {formatBytes(v.sizeBytes)} · {v.usedBy.length ? `used by ${v.usedBy.join(", ")}` : "not in use"}
+                    {v.driver} · {formatBytes(v.sizeBytes)} · {(v.usedBy ?? []).length ? `used by ${(v.usedBy ?? []).join(", ")}` : "not in use"}
                   </p>
                 </div>
-                {v.usedBy.length === 0 ? (
+                {(v.usedBy ?? []).length === 0 ? (
                   <Button size="sm" variant="ghost" onClick={() => setToRemove(v)} className="shrink-0 text-muted-foreground hover:text-destructive">
                     <Trash2 className="size-4" />
                   </Button>
                 ) : (
-                  <span className="shrink-0 rounded-lg bg-muted px-2 py-1 text-[11px] text-muted-foreground">{v.usedBy.length} dependent</span>
+                  <span className="shrink-0 rounded-lg bg-muted px-2 py-1 text-[11px] text-muted-foreground">{(v.usedBy ?? []).length} dependent</span>
                 )}
               </div>
             ))}

@@ -42,7 +42,8 @@ export function durationMs(ms: number | null | undefined): string {
   return `${m}m ${s % 60}s`;
 }
 
-export function shortId(id: string): string {
+export function shortId(id: string | null | undefined): string {
+  if (!id) return "—";
   return id.length > 14 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
 }
 

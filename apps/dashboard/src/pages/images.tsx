@@ -104,7 +104,7 @@ export function ImagesPage() {
                     {img.repository}:<span className="text-muted-foreground">{img.tag}</span>
                   </p>
                   <p className="truncate text-[11px] text-muted-foreground">
-                    {img.id.slice(7, 19)} · {formatBytes(img.sizeBytes)} · created {timeAgo(img.created)}
+                    {img.id ? img.id.slice(7, 19) : "—"} · {formatBytes(img.sizeBytes)} · created {timeAgo(img.created)}
                   </p>
                 </div>
                 {img.containers > 0 ? (
