@@ -88,6 +88,57 @@ export class DockerService {
     });
   }
 
+  /**
+   * Stream `docker logs -f` for a container, delivering complete lines to
+   * `onLine` (buffered across chunk boundaries) and calling `onEnd` when the
+   * stream closes (container stopped, removed, or the process was killed).
+   * Returns a handle whose `stop()` kills the follow process.
+   */
+  followLogs(
+    id: string,
+    tail: number,
+    onLine: (line: string) => void,
+    onEnd: () => void,
+  ): { stop: () => void } {
+    const full = [...this.baseArgs(), "logs", "-f", "--tail", String(Math.max(0, tail)), id];
+    const child = spawn(dockerBin(), full, { windowsHide: true });
+    let buffer = "";
+    let finished = false;
+    const flush = () => {
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const l of lines) {
+        const t = l.replace(/\r$/, "");
+        if (t.trim().length > 0) onLine(t);
+      }
+    };
+    const handleData = (d: Buffer) => {
+      if (finished) return;
+      buffer += d.toString();
+      flush();
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (buffer.trim()) onLine(buffer.replace(/\r$/, ""));
+      onEnd();
+    };
+    child.stdout.on("data", handleData);
+    child.stderr.on("data", handleData);
+    child.on("error", () => finish());
+    child.on("close", () => finish());
+    return {
+      stop: () => {
+        finish();
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      },
+    };
+  }
+
   private async parseLines<T>(args: string[], timeoutMs?: number): Promise<T[]> {
     const res = await this.run(args, { timeoutMs });
     if (res.code !== 0) {
@@ -234,9 +285,13 @@ export class DockerService {
     return out;
   }
 
-  async exec(id: string, cmd: string[], opts: { stdin?: string | Uint8Array; timeoutMs?: number } = {}): Promise<{ output: string; exitCode: number }> {
+  async exec(id: string, cmd: string[], opts: { stdin?: string | Uint8Array; timeoutMs?: number; shell?: boolean } = {}): Promise<{ output: string; exitCode: number }> {
     return new Promise((resolve, reject) => {
-      const full = [...this.baseArgs(), "exec", "-i", id, ...cmd];
+      // With `shell` the user typed a real command line (&&, |, variables…), so
+      // run it through the container's shell instead of exec-args.
+      const full = opts.shell
+        ? [...this.baseArgs(), "exec", "-i", id, "/bin/sh", "-c", cmd.join(" ")]
+        : [...this.baseArgs(), "exec", "-i", id, ...cmd];
       const child = spawn(dockerBin(), full, { windowsHide: true });
       let stdout = "";
       let stderr = "";

@@ -15,7 +15,7 @@ export interface AuthUser {
   role: Role;
 }
 
-type AuthContext = Context<{ Variables: AppVariables }>;
+export type AuthContext = Context<{ Variables: AppVariables }>;
 
 /** Loads the session user from the cookie; throws UNAUTHORIZED if absent. */
 export async function requireAuth(c: AuthContext, next: Next): Promise<void> {

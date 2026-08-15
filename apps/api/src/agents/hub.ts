@@ -96,6 +96,9 @@ export class AgentHub {
     this.rejectAll(conn, errors.serverOffline("Agent disconnected"));
     this.connections.delete(serverId);
     void this.db.run(`UPDATE server_agents SET connected = 0 WHERE server_id = ?`, [serverId]);
+    // Any live log streams on this server just died — tell subscribers so the
+    // dashboards fall back to re-seeding / re-subscribing.
+    void import("../websocket/log-streams").then(({ handleAgentDisconnect }) => handleAgentDisconnect(serverId));
   }
 
   private rejectAll(conn: AgentConnection, err: Error): void {
@@ -293,6 +296,18 @@ export class AgentHub {
         if (gameId && data.status) {
           await this.db.run(`UPDATE game_servers SET status = ?, updated_at = ? WHERE id = ?`, [String(data.status), new Date().toISOString(), gameId]);
         }
+        return;
+      }
+      case "container.log": {
+        const streamId = String(resourceId ?? "");
+        if (!streamId) return;
+        eventHub.emit({
+          type: "container.log",
+          streamId,
+          containerId: String(data.containerId ?? ""),
+          line: String(data.line ?? ""),
+          ended: data.ended === true,
+        });
         return;
       }
       default:

@@ -23,6 +23,7 @@ import { Switch } from "@/components/ui/Switch";
 import { useToast } from "@/components/toast";
 import { formatBytes, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useLiveLogs } from "@/lib/use-live-logs";
 import type { GameServer, Server, SystemMetrics } from "@nexus/types";
 
 type TabKey = "console" | "files" | "schedules" | "users" | "backups" | "network" | "startup" | "settings" | "activity";
@@ -86,6 +87,9 @@ export function GameServerDetailPage() {
   const [tab, setTab] = useState<TabKey>("console");
   const [cmd, setCmd] = useState("");
   const [execBusy, setExecBusy] = useState(false);
+  // Lines echoed straight into the console (sent commands + exec output) so the
+  // terminal feels live without popping a toast for every command.
+  const [sent, setSent] = useState<{ ts: string; text: string; kind: "cmd" | "out" | "err" }[]>([]);
   const [actionBusy, setActionBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -136,14 +140,20 @@ export function GameServerDetailPage() {
     lastNetRef.current = { rx: stats.networkRxBytes, tx: stats.networkTxBytes };
   }, [stats]);
 
-  const { data: logsData, refetch: refetchLogs } = useQuery({
-    queryKey: ["game-server-logs", id],
-    queryFn: () => get<{ logs: string }>(`/game-servers/${id}/logs?tail=200`),
-    enabled: !!game?.containerId && tab === "console",
-    refetchInterval: tab === "console" && game?.containerId ? 5000 : false,
+  // Live console: seed from REST, then stream lines over the dashboard WS.
+  // No 5s polling while the stream is alive.
+  const { text: liveText, live, resync: resyncLogs } = useLiveLogs({
+    enabled: tab === "console" && !!game?.containerId,
+    streamId: game?.containerId ? `game:${id}` : null,
+    kind: "game",
+    id,
+    seed: async () => {
+      const res = await get<{ logs: string }>(`/game-servers/${id}/logs?tail=200`);
+      return res.logs;
+    },
   });
 
-  const logs = useMemo(() => parseLogs(logsData?.logs ?? ""), [logsData]);
+  const logs = useMemo(() => parseLogs(liveText), [liveText]);
 
   // Always jump to the newest logs (bottom) when the Console tab opens, and
   // follow new lines as they arrive. Deps include `tab` so re-entering the tab
@@ -151,7 +161,7 @@ export function GameServerDetailPage() {
   useEffect(() => {
     if (tab !== "console") return;
     if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
-  }, [tab, logs.length]);
+  }, [tab, logs.length, sent.length]);
 
   const runAction = async (action: "start" | "stop" | "restart") => {
     setActionBusy(true);
@@ -159,8 +169,7 @@ export function GameServerDetailPage() {
       await post(`/game-servers/${id}/${action}`);
       toast("success", `${action[0].toUpperCase()}${action.slice(1)} requested`, game?.name);
       queryClient.invalidateQueries({ queryKey: ["game-server-detail", id] });
-      queryClient.invalidateQueries({ queryKey: ["game-server-logs", id] });
-      setTimeout(() => refetchLogs(), 800);
+      setTimeout(() => void resyncLogs(), 800);
     } catch (err) {
       toast("error", "Action failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -172,16 +181,19 @@ export function GameServerDetailPage() {
     const parts = cmd.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0 || !game?.containerId) return;
     setExecBusy(true);
+    const text = parts.join(" ");
+    setSent((s) => [...s, { ts: new Date().toLocaleTimeString("pt-BR", { hour12: false }), text: `> ${text}`, kind: "cmd" }]);
     try {
       const res = await post<{ output: string; exitCode: number }>(`/game-servers/${id}/exec`, { cmd: parts });
-      if (res.output?.trim()) {
-        toast("success", "Command sent", parts.join(" "));
-      } else {
-        toast("success", "Command sent", `${parts.join(" ")} (exit ${res.exitCode})`);
+      const out = res.output?.trim();
+      if (out) {
+        for (const line of out.split("\n")) {
+          setSent((s) => [...s, { ts: "", text: line, kind: res.exitCode === 0 ? "out" : "err" }]);
+        }
       }
-      setTimeout(() => refetchLogs(), 600);
+      setTimeout(() => void resyncLogs(), 600);
     } catch (err) {
-      toast("error", "Command failed", err instanceof Error ? err.message : "Unknown error");
+      setSent((s) => [...s, { ts: "", text: `✗ ${err instanceof Error ? err.message : "Unknown error"}`, kind: "err" }]);
     } finally {
       setExecBusy(false);
       setCmd("");
@@ -278,7 +290,7 @@ export function GameServerDetailPage() {
                   <CardTitle className="flex items-center gap-2 text-[13px] font-medium">
                     <Terminal className="size-3.5 text-muted-foreground" /> Console
                   </CardTitle>
-                  <span className="text-[11px] text-muted-foreground">{running ? "live · 5s" : "stopped"}</span>
+                  <span className="text-[11px] text-muted-foreground">{running ? (live ? "● live" : "connecting…") : "stopped"}</span>
                 </CardHeader>
                 <CardContent className="p-0">
                   <div ref={consoleRef} className="h-[420px] overflow-auto bg-black/85 p-4 font-mono text-[11.5px] leading-relaxed">
@@ -291,6 +303,18 @@ export function GameServerDetailPage() {
                       <div key={i} className="flex gap-3 whitespace-pre-wrap break-all">
                         <span className="shrink-0 select-none text-zinc-500">{l.ts || "••••••"}</span>
                         <span className={levelClass[l.level]}>{l.text}</span>
+                      </div>
+                    ))}
+                    {sent.map((l, i) => (
+                      <div key={`s${i}`} className="flex gap-3 whitespace-pre-wrap break-all">
+                        <span className="shrink-0 select-none text-zinc-500">{l.ts || "      "}</span>
+                        <span
+                          className={cn(
+                            l.kind === "cmd" ? "font-semibold text-cyan-300" : l.kind === "err" ? "text-red-400" : "text-zinc-300",
+                          )}
+                        >
+                          {l.text}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -403,17 +427,7 @@ export function GameServerDetailPage() {
         {tab === "backups" && <BackupsTab game={game} />}
         {tab === "network" && <NetworkTab game={game} />}
         {tab === "startup" && <StartupTab game={game} />}
-        {tab === "users" && (
-          <Card>
-            <CardContent className="py-16 text-center">
-              <Users className="mx-auto size-10 text-muted-foreground/50" />
-              <h3 className="mt-4 text-sm font-semibold">Users</h3>
-              <p className="mx-auto mt-1 max-w-sm text-[13px] text-muted-foreground">
-                Sub-user management for game servers is not available yet.
-              </p>
-            </CardContent>
-          </Card>
-        )}
+        {tab === "users" && <UsersTab game={game} />}
         {tab === "settings" && <SettingsTab game={game} />}
         {tab === "activity" && <ActivityTab game={game} />}
       </div>
@@ -507,7 +521,7 @@ interface GameFileEntry {
 }
 
 const displayPath = (p: string): string => (p === DATA_ROOT ? "/home/container/" : `/home/container${p.slice(DATA_ROOT.length)}`);
-const joinPath = (base: string, name: string): string => `${base === DATA_ROOT ? "" : base}/${name}`;
+const joinPath = (base: string, name: string): string => `${base}/${name}`;
 
 function FilesTab({ game }: { game: GameServer }) {
   const { toast } = useToast();
@@ -1446,6 +1460,212 @@ function MenuItem({
       {icon}
       {label}
     </button>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Users — sub-user access (Pterodactyl-style)
+   ───────────────────────────────────────────────────────────────── */
+
+const USER_PERMS: { key: string; label: string; desc: string }[] = [
+  { key: "console", label: "Console", desc: "Send commands, view the live console and stats" },
+  { key: "startstop", label: "Start / Stop / Restart", desc: "Control the server power state" },
+  { key: "files", label: "Files", desc: "Browse, edit, upload and delete files" },
+  { key: "schedules", label: "Schedules", desc: "Create and run cron schedules" },
+  { key: "backups", label: "Backups", desc: "Create, download, restore and delete backups" },
+  { key: "network", label: "Network", desc: "Manage network allocations" },
+  { key: "startup", label: "Startup", desc: "Change the docker image and environment" },
+  { key: "activity", label: "Activity", desc: "View server activity" },
+];
+
+interface GameServerUser {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  permissions: string[];
+  createdAt: string;
+}
+
+function UsersTab({ game }: { game: GameServer }) {
+  const { toast } = useToast();
+  const id = game.id;
+  const [items, setItems] = useState<GameServerUser[] | null>(null);
+  const [available, setAvailable] = useState<{ id: string; name: string; email: string; role: string }[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [savingPerm, setSavingPerm] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<GameServerUser | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await get<{ items: GameServerUser[]; available: { id: string; name: string; email: string; role: string }[] }>(`/game-servers/${id}/users`);
+      setItems(res.items);
+      setAvailable(res.available);
+      setSelectedUserId((cur) => (res.available.some((u) => u.id === cur) ? cur : res.available[0]?.id ?? ""));
+    } catch (e) {
+      toast("error", "Failed to load users", e instanceof Error ? e.message : "Unknown error");
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const togglePerm = async (u: GameServerUser, perm: string) => {
+    setSavingPerm(u.id);
+    const next = u.permissions.includes(perm) ? u.permissions.filter((p) => p !== perm) : [...u.permissions, perm];
+    try {
+      await patch(`/game-server-users/${u.id}`, { permissions: next });
+      setItems((list) => (list ?? []).map((x) => (x.id === u.id ? { ...x, permissions: next } : x)));
+    } catch (e) {
+      toast("error", "Update failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setSavingPerm(null);
+    }
+  };
+
+  const addUser = async () => {
+    if (!selectedUserId) return;
+    setAdding(true);
+    try {
+      await post(`/game-servers/${id}/users`, { userId: selectedUserId, permissions: ["console"] });
+      toast("success", "User granted access", available.find((u) => u.id === selectedUserId)?.name);
+      void load();
+    } catch (e) {
+      toast("error", "Add failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const confirmRemove = async () => {
+    if (!removeTarget) return;
+    setRemoving(true);
+    try {
+      await del(`/game-servers/${id}/users/${removeTarget.userId}`);
+      toast("success", "Access revoked", removeTarget.name);
+      setRemoveTarget(null);
+      void load();
+    } catch (e) {
+      toast("error", "Revoke failed", e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Users</h2>
+          <p className="text-[13px] text-muted-foreground">Grant platform users access to {game.name} with per-feature permissions.</p>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-[13px] font-medium">
+            <Users className="size-3.5 text-muted-foreground" /> Users with access
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {items === null && <Skeleton className="h-20" />}
+          {(items ?? []).length === 0 && !items && null}
+          {(items ?? []).length === 0 && items && (
+            <p className="py-6 text-center text-sm text-muted-foreground">No sub-users granted yet — only admins can access this server.</p>
+          )}
+          {(items ?? []).map((u) => (
+            <div key={u.id} className="rounded-xl border border-border/60 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    {u.name}
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium uppercase text-muted-foreground">{u.role}</span>
+                  </p>
+                  <p className="truncate text-[12px] text-muted-foreground">{u.email}</p>
+                </div>
+                <button
+                  onClick={() => setRemoveTarget(u)}
+                  className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  title="Revoke access"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {USER_PERMS.map((p) => {
+                  const on = u.permissions.includes(p.key);
+                  return (
+                    <button
+                      key={p.key}
+                      onClick={() => void togglePerm(u, p.key)}
+                      disabled={savingPerm === u.id}
+                      title={p.desc}
+                      className={cn(
+                        "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-medium transition-all",
+                        on
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-border/60 bg-muted/30 text-muted-foreground hover:border-ring/40 hover:text-foreground",
+                        savingPerm === u.id && "opacity-60",
+                      )}
+                    >
+                      {on ? <Check className="size-3" /> : <Plus className="size-3" />}
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-[13px] font-medium">Add user</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {available.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">All platform users already have access to this server.</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="h-10 min-w-0 flex-1 rounded-lg border border-border/60 bg-background px-3 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+              >
+                {available.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} ({u.email})
+                  </option>
+                ))}
+              </select>
+              <Button onClick={() => void addUser()} disabled={adding || !selectedUserId}>
+                {adding ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Grant access
+              </Button>
+            </div>
+          )}
+          <p className="mt-3 text-[11.5px] text-muted-foreground/70">
+            New users start with the <span className="font-medium">Console</span> permission — toggle the chips above to fine-tune.
+          </p>
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        open={!!removeTarget}
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={() => void confirmRemove()}
+        loading={removing}
+        title="Revoke access"
+        description="This user will no longer be able to access this game server or any of its features."
+        resourceName={removeTarget?.name ?? ""}
+        confirmLabel="Revoke"
+      />
+    </div>
   );
 }
 

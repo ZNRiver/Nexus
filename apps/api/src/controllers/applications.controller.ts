@@ -171,6 +171,7 @@ export function registerApplicationRoutes(app: App, ctx: AppContext): void {
       id: app.currentContainerId,
       cmd,
       timeoutMs: 30000,
+      shell: true,
     }) as { output: string; exitCode: number };
     await ctx.audit({ action: "application.exec", resourceType: "application", resourceId: app.id, resourceName: app.name, serverId: app.serverId, metadata: { cmd } });
     return c.json({ success: true, ...result });

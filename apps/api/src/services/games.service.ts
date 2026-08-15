@@ -6,6 +6,35 @@ import type { AppContext } from "../context";
 import { JobQueue } from "../jobs/queue";
 import { eventHub } from "../lib/events";
 import { nextRun, parseCron } from "../lib/cron";
+import { newToken } from "../lib/crypto";
+
+/**
+ * RCON lets the panel send real server commands to the console (the itzg
+ * images run the server in the foreground, so plain `docker exec` can't reach
+ * the console — `rcon-cli` inside the container is the supported channel).
+ */
+function rconDefaults(): Record<string, string> {
+  return {
+    ENABLE_RCON: "TRUE",
+    RCON_PASSWORD: newToken(8),
+    RCON_PORT: "25575",
+  };
+}
+
+function parseEnv(raw: string | null | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+/** Ensure RCON is enabled (used for servers created before RCON support). */
+function ensureRcon(env: Record<string, string>): Record<string, string> {
+  if (env.ENABLE_RCON === "TRUE" && env.RCON_PASSWORD) return env;
+  return { ...rconDefaults(), ...env };
+}
 
 const GAME_IMAGES: Record<string, { default: string; versions: string[] }> = {
   MINECRAFT: {
@@ -21,6 +50,28 @@ const FLAVOR_ENV: Record<MinecraftFlavor, string> = {
   FABRIC: "FABRIC",
   FORGE: "FORGE",
 };
+
+/** Feature permissions a sub-user can be granted on a game server. */
+export const GAME_USER_PERMS = ["console", "startstop", "files", "backups", "schedules", "network", "startup", "activity"] as const;
+export type GameUserPerm = (typeof GAME_USER_PERMS)[number];
+
+function normalizeGamePerms(input: string[] | undefined | null): string[] {
+  const seen = new Set<string>();
+  for (const p of input ?? []) {
+    if (GAME_USER_PERMS.includes(p as GameUserPerm)) seen.add(p);
+  }
+  return [...seen];
+}
+
+function safeGamePerms(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed.filter((p): p is string => typeof p === "string");
+  } catch {
+    /* fall through */
+  }
+  return [];
+}
 
 export function toGameServer(row: GameServerRow): GameServer {
   let environment: Record<string, string> = {};
@@ -59,12 +110,17 @@ export class GameServersService {
     private readonly ctx: AppContext,
   ) {}
 
-  async list(opts: { serverId?: string; limit: number; cursor?: string }): Promise<{ items: GameServer[]; nextCursor: string | null }> {
+  async list(opts: { serverId?: string; limit: number; cursor?: string; userId?: string }): Promise<{ items: GameServer[]; nextCursor: string | null }> {
     const where: string[] = [];
     const params: unknown[] = [];
     if (opts.serverId) {
       where.push("server_id = ?");
       params.push(opts.serverId);
+    }
+    if (opts.userId) {
+      // Non-admin users only see game servers they were granted access to.
+      where.push("id IN (SELECT game_server_id FROM game_server_users WHERE user_id = ?)");
+      params.push(opts.userId);
     }
     if (opts.cursor) {
       where.push("created_at <= ?");
@@ -109,6 +165,7 @@ export class GameServersService {
       TYPE: flavor ? FLAVOR_ENV[flavor] : "VANILLA",
       VERSION: version === "latest" ? "LATEST" : version,
       MEMORY: `${Math.round(memoryBytes / 1024 ** 2)}M`,
+      ...rconDefaults(),
       ...(input.environment ?? {}),
     };
 
@@ -138,7 +195,7 @@ export class GameServersService {
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw Object.assign(new Error("Server offline — game server creation will retry"), { retryable: true });
 
-    const environment = row.environment ? (JSON.parse(row.environment) as Record<string, string>) : {};
+    const environment = ensureRcon(parseEnv(row.environment));
     try {
       const result = await hub.request(row.server_id, "game.create", {
         gameServerId: row.id,
@@ -194,16 +251,33 @@ export class GameServersService {
     return result;
   }
 
-  /** Run a command inside the game server container (console). */
+  /** Run a command inside the game server container (console).
+   *
+   * The itzg images run the game in the foreground, so `docker exec` can't
+   * deliver console commands — when RCON is enabled we go through `rcon-cli`
+   * (bundled in the image) so commands actually reach the server.
+   */
   async exec(id: string, cmd: string[]): Promise<{ output: string; exitCode: number }> {
     const row = await this.get(id);
     const hub = this.ctx.hub;
     if (!hub.isOnline(row.server_id)) throw errors.serverOffline();
     if (!row.container_id) throw errors.conflict("Game server container is not running");
+    const env = parseEnv(row.environment);
+    const rconPw = env.RCON_PASSWORD;
+    // Commands with shell metacharacters (&&, |, ;, $, >, <, `) or that start
+    // with a filesystem path are system commands → run them through the real
+    // shell. Everything else is a game command → RCON.
+    const line = cmd.join(" ");
+    const looksLikeShell =
+      /[&|;<>$`]/.test(line) || /^(cd|ls|cat|pwd|echo|find|grep|tail|head|rm|cp|mv|mkdir|touch|ps|top|free|df|du|env|which|whoami|id|uname|docker)\b/.test(line.trim());
+    const execCmd = rconPw && !looksLikeShell
+      ? ["rcon-cli", "--host", "127.0.0.1", "--port", env.RCON_PORT ?? "25575", "--password", rconPw, ...cmd]
+      : cmd;
     const result = await hub.request(row.server_id, "container.exec", {
       id: row.container_id,
-      cmd,
+      cmd: execCmd,
       timeoutMs: 30000,
+      shell: looksLikeShell,
     }) as { output: string; exitCode: number };
     await this.ctx.audit({ action: "game.exec", resourceType: "game-server", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { cmd } });
     return result;
@@ -626,6 +700,85 @@ export class GameServersService {
     return this.listAllocations(gameServerId);
   }
 
+  /* ── Sub-users (Pterodactyl-style access control) ────────────── */
+
+  async grantUser(gameServerId: string, userId: string, permissions: string[]): Promise<{ id: string; userId: string; permissions: string[]; createdAt: string }> {
+    const game = await this.get(gameServerId);
+    const user = await this.db.get<{ id: string; role: string; name: string }>(`SELECT id, role, name FROM users WHERE id = ?`, [userId]);
+    if (!user) throw errors.notFound("User not found");
+    if (user.role === "owner") throw errors.validation({ userId: "The owner always has full access — no grant needed" });
+    const perms = normalizeGamePerms(permissions);
+    const existing = await this.db.get(`SELECT id FROM game_server_users WHERE game_server_id = ? AND user_id = ?`, [gameServerId, userId]);
+    if (existing) throw errors.conflict("This user already has access to the game server");
+    const id = newId("gsu");
+    const now = new Date().toISOString();
+    await this.db.run(
+      `INSERT INTO game_server_users (id, game_server_id, user_id, permissions, created_at) VALUES (?, ?, ?, ?, ?)`,
+      [id, gameServerId, userId, JSON.stringify(perms), now],
+    );
+    await this.ctx.audit({ action: "game.user.grant", resourceType: "game-server", resourceId: gameServerId, resourceName: game.name, serverId: game.server_id, metadata: { userId, permissions: perms } });
+    return { id, userId, permissions: perms, createdAt: now };
+  }
+
+  async updateUserPermissions(grantId: string, permissions: string[]): Promise<{ id: string; userId: string; permissions: string[]; createdAt: string }> {
+    const row = await this.db.get<{ id: string; game_server_id: string; user_id: string; created_at: string }>(`SELECT * FROM game_server_users WHERE id = ?`, [grantId]);
+    if (!row) throw errors.notFound("Grant not found");
+    const perms = normalizeGamePerms(permissions);
+    await this.db.run(`UPDATE game_server_users SET permissions = ? WHERE id = ?`, [JSON.stringify(perms), grantId]);
+    const game = await this.get(row.game_server_id);
+    await this.ctx.audit({ action: "game.user.update", resourceType: "game-server", resourceId: row.game_server_id, resourceName: game.name, serverId: game.server_id, metadata: { grantId, permissions: perms } });
+    return { id: row.id, userId: row.user_id, permissions: perms, createdAt: row.created_at };
+  }
+
+  async revokeUser(gameServerId: string, userId: string): Promise<void> {
+    const game = await this.get(gameServerId);
+    await this.db.run(`DELETE FROM game_server_users WHERE game_server_id = ? AND user_id = ?`, [gameServerId, userId]);
+    await this.ctx.audit({ action: "game.user.revoke", resourceType: "game-server", resourceId: gameServerId, resourceName: game.name, serverId: game.server_id, metadata: { userId } });
+  }
+
+  async listUsers(gameServerId: string): Promise<{
+    items: { id: string; userId: string; name: string; email: string; role: string; permissions: string[]; createdAt: string }[];
+    available: { id: string; name: string; email: string; role: string }[];
+  }> {
+    await this.get(gameServerId);
+    const rows = await this.db.all<{ id: string; user_id: string; name: string; email: string; role: string; permissions: string; created_at: string }>(
+      `SELECT gu.id, gu.user_id, u.name, u.email, u.role, gu.permissions, gu.created_at
+       FROM game_server_users gu JOIN users u ON u.id = gu.user_id
+       WHERE gu.game_server_id = ? ORDER BY gu.created_at ASC`,
+      [gameServerId],
+    );
+    const available = await this.db.all<{ id: string; name: string; email: string; role: string }>(
+      `SELECT id, name, email, role FROM users
+       WHERE role != 'owner' AND id NOT IN (SELECT user_id FROM game_server_users WHERE game_server_id = ?)
+       ORDER BY name ASC`,
+      [gameServerId],
+    );
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        name: r.name,
+        email: r.email,
+        role: r.role,
+        permissions: safeGamePerms(r.permissions),
+        createdAt: r.created_at,
+      })),
+      available,
+    };
+  }
+
+  /** Grant check used by route middleware for non-admin users. */
+  async userHasGamePerm(gameServerId: string, userId: string, perm?: string): Promise<boolean> {
+    const row = await this.db.get<{ permissions: string }>(
+      `SELECT permissions FROM game_server_users WHERE game_server_id = ? AND user_id = ?`,
+      [gameServerId, userId],
+    );
+    if (!row) return false;
+    if (!perm) return true;
+    const perms = safeGamePerms(row.permissions);
+    return perms.includes(perm) || perms.includes("*");
+  }
+
   /* ── Startup ─────────────────────────────────────────────────── */
 
   /** Compose a human-readable startup command from the env (cosmetic, Pterodactyl-style). */
@@ -651,8 +804,8 @@ export class GameServersService {
   /** Update the image / environment and re-create the container (volume preserved). */
   async updateStartup(id: string, input: { image?: string; environment?: Record<string, string> }): Promise<{ gameServer: GameServer; applied: boolean }> {
     const row = await this.get(id);
-    const env = row.environment ? (JSON.parse(row.environment) as Record<string, string>) : {};
-    const nextEnv = { ...env, ...(input.environment ?? {}) };
+    const env = parseEnv(row.environment);
+    const nextEnv = ensureRcon({ ...env, ...(input.environment ?? {}) });
     const image = input.image?.trim() || row.image;
     const def = GAME_IMAGES[row.game as keyof typeof GAME_IMAGES];
     if (def && !def.versions.includes(image) && !image.includes(":")) {

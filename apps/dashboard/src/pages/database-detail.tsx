@@ -22,6 +22,7 @@ import { useToast } from "@/components/toast";
 import { formatBytes, formatTime, timeAgo } from "@/lib/format";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
 import { OperationLogPanel } from "@/components/operation-log-panel";
+import { useLiveLogs } from "@/lib/use-live-logs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/Switch";
@@ -79,12 +80,16 @@ export function DatabaseDetailPage() {
     refetchInterval: 8000,
   });
 
-  const logsQ = useQuery({
-    queryKey: ["database-logs", id],
-    queryFn: () => get<{ logs: string }>(`/databases/${id}/logs`),
-    enabled: tab === "logs",
-    refetchInterval: tab === "logs" ? 5000 : false,
-    retry: false,
+  // Live container logs for the Logs tab (WS streaming, no 5s polling).
+  const { text: dbLogsText, live: dbLogsLive, resync: resyncDbLogs } = useLiveLogs({
+    enabled: tab === "logs" && !!data?.database.containerId,
+    streamId: data?.database.containerId ? `db:${id}` : null,
+    kind: "database",
+    id,
+    seed: async () => {
+      const res = await get<{ logs: string }>(`/databases/${id}/logs?tail=200`);
+      return res.logs;
+    },
   });
 
   const envQ = useQuery({
@@ -455,23 +460,18 @@ export function DatabaseDetailPage() {
         {tab === "logs" && (
           <Card>
             <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-sm">Container Logs</CardTitle>
-              <Button size="sm" variant="outline" onClick={() => void logsQ.refetch()} disabled={logsQ.isFetching}>
-                <RefreshCw className={cn("size-3.5", logsQ.isFetching && "animate-spin")} /> Refresh
+              <CardTitle className="flex items-center gap-2 text-sm">
+                Container Logs
+                <span className="text-[11px] font-normal text-muted-foreground">{dbLogsLive ? "● live" : "connecting…"}</span>
+              </CardTitle>
+              <Button size="sm" variant="outline" onClick={() => void resyncDbLogs()}>
+                <RefreshCw className="size-3.5" /> Refresh
               </Button>
             </CardHeader>
             <CardContent>
-              {logsQ.isLoading ? (
-                <Skeleton className="h-48" />
-              ) : logsQ.error ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">
-                  {(logsQ.error as Error).message}
-                </p>
-              ) : (
-                <pre className="nexus-terminal max-h-[480px] overflow-auto rounded-xl bg-black/85 p-4 text-zinc-100">
-                  {logsQ.data?.logs || "No logs yet."}
-                </pre>
-              )}
+              <pre className="nexus-terminal max-h-[480px] overflow-auto rounded-xl bg-black/85 p-4 text-zinc-100">
+                {dbLogsText || (dbLogsLive ? "No logs yet." : "Connecting to live logs…")}
+              </pre>
             </CardContent>
           </Card>
         )}
@@ -791,35 +791,47 @@ function MetricCard({ icon: Icon, label, value }: { icon: ComponentType<{ classN
 /* ── Container Console (terminal) ─────────────────────────────── */
 
 function DbContainerConsole({ db, containerName }: { db: Database; containerName: string }) {
-  const { toast } = useToast();
   const id = db.id;
   const consoleRef = useRef<HTMLDivElement>(null);
   const [cmd, setCmd] = useState("");
   const [execBusy, setExecBusy] = useState(false);
+  // Commands echoed into the terminal (no toast spam on every exec).
+  const [sent, setSent] = useState<{ text: string; kind: "cmd" | "out" | "err" }[]>([]);
   const running = db.status === "RUNNING";
 
-  const logsQ = useQuery({
-    queryKey: ["database-console-logs", id],
-    queryFn: () => get<{ logs: string }>(`/databases/${id}/logs?tail=200`),
+  // Live console: WS streaming with REST seed — no 5s polling while live.
+  const { text: logsText, live, resync: resyncLogs } = useLiveLogs({
     enabled: running,
-    refetchInterval: running ? 5000 : false,
-    retry: false,
+    streamId: running ? `db:${id}` : null,
+    kind: "database",
+    id,
+    seed: async () => {
+      const res = await get<{ logs: string }>(`/databases/${id}/logs?tail=200`);
+      return res.logs;
+    },
   });
 
   useEffect(() => {
     if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
-  }, [logsQ.data?.logs]);
+  }, [logsText, sent.length]);
 
   const runExec = async () => {
     const parts = cmd.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0) return;
     setExecBusy(true);
+    const text = parts.join(" ");
+    setSent((s) => [...s, { text: `> ${text}`, kind: "cmd" }]);
     try {
-      await post<{ output: string; exitCode: number }>(`/databases/${id}/exec`, { cmd: parts });
-      toast("success", "Command sent", parts.join(" "));
-      setTimeout(() => void logsQ.refetch(), 600);
+      const res = await post<{ output: string; exitCode: number }>(`/databases/${id}/exec`, { cmd: parts });
+      const out = res.output?.trim();
+      if (out) {
+        for (const line of out.split("\n")) {
+          setSent((s) => [...s, { text: line, kind: res.exitCode === 0 ? "out" : "err" }]);
+        }
+      }
+      setTimeout(() => void resyncLogs(), 600);
     } catch (err) {
-      toast("error", "Command failed", err instanceof Error ? err.message : "Unknown error");
+      setSent((s) => [...s, { text: `✗ ${err instanceof Error ? err.message : "Unknown error"}`, kind: "err" }]);
     } finally {
       setExecBusy(false);
       setCmd("");
@@ -832,20 +844,24 @@ function DbContainerConsole({ db, containerName }: { db: Database; containerName
         <CardTitle className="flex items-center gap-2 text-[13px] font-medium">
           <Terminal className="size-3.5 text-muted-foreground" /> Container Console
         </CardTitle>
-        <span className="text-[11px] text-muted-foreground">{running ? "live · 5s" : "container not running"}</span>
+        <span className="text-[11px] text-muted-foreground">{running ? (live ? "● live" : "connecting…") : "container not running"}</span>
       </CardHeader>
       <CardContent className="p-0">
         <div ref={consoleRef} className="h-[420px] overflow-auto bg-black/85 p-4 font-mono text-[11.5px] leading-relaxed">
-          {logsQ.isLoading && <p className="py-8 text-center text-sm text-zinc-500">Loading logs…</p>}
-          {!logsQ.isLoading && logsQ.error && (
-            <p className="py-8 text-center text-sm text-zinc-500">{(logsQ.error as Error).message}</p>
+          {(logsText || "").trim().length === 0 && !live && (
+            <p className="py-8 text-center text-sm text-zinc-500">Connecting to live logs…</p>
           )}
-          {!logsQ.isLoading && !logsQ.error && (logsQ.data?.logs || "").trim().length === 0 && (
+          {(logsText || "").trim().length === 0 && live && (
             <p className="py-8 text-center text-sm text-zinc-500">
               {running ? "No output yet — send a command or wait for the container to produce logs." : `Start the ${containerName} container to see its console.`}
             </p>
           )}
-          <pre className="whitespace-pre-wrap break-all text-zinc-100">{logsQ.data?.logs ?? ""}</pre>
+          <pre className="whitespace-pre-wrap break-all text-zinc-100">{logsText}</pre>
+          {sent.map((l, i) => (
+            <div key={`s${i}`} className="whitespace-pre-wrap break-all">
+              <span className={l.kind === "cmd" ? "font-semibold text-cyan-300" : l.kind === "err" ? "text-red-400" : "text-zinc-300"}>{l.text}</span>
+            </div>
+          ))}
         </div>
         <div className="flex items-center gap-2 border-t border-border/50 bg-muted/30 px-3 py-2.5">
           <span className="select-none font-mono text-sm font-semibold text-primary">&gt;&gt;</span>

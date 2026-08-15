@@ -53,7 +53,7 @@ export class InfraService {
 
   async containerExec(serverId: string, containerId: string, cmd: string[]): Promise<{ output: string; exitCode: number }> {
     await this.requireOnlineServer(serverId);
-    const result = await this.ctx.hub.request(serverId, "container.exec", { id: containerId, cmd, timeoutMs: 30000 }) as { output: string; exitCode: number };
+    const result = await this.ctx.hub.request(serverId, "container.exec", { id: containerId, cmd, timeoutMs: 30000, shell: true }) as { output: string; exitCode: number };
     await this.ctx.audit({ action: "container.exec", resourceType: "container", resourceId: containerId, serverId, metadata: { cmd } });
     return result;
   }

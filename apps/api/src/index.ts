@@ -204,12 +204,23 @@ const server = Bun.serve<WsData>({
       const data = ws.data;
       if (data.kind === "agent" && "serverId" in data) {
         await hub.handleMessage(data.serverId, raw.toString());
+      } else if (data.kind === "dashboard") {
+        const { handleDashboardMessage } = await import("./websocket/log-streams");
+        await handleDashboardMessage(db, hub, ws as unknown as WebSocket, raw.toString());
       }
     },
     close(ws) {
       const data = ws.data;
       if (data.kind === "agent" && "serverId" in data) {
         hub.unregister(data.serverId);
+      } else if (data.kind === "dashboard") {
+        void import("./websocket/log-streams")
+          .then(async ({ handleSocketClosed }) => {
+            const { getDashboardSocket } = await import("./websocket/dashboard");
+            const socket = getDashboardSocket(ws as unknown as WebSocket);
+            if (socket) await handleSocketClosed(hub, socket);
+          })
+          .catch(() => {});
       }
     },
   },

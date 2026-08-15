@@ -82,7 +82,8 @@ export type DashboardEvent =
   | { type: "database.status"; database: Database }
   | { type: "game.status"; gameServer: GameServer }
   | { type: "job.status"; job: Job }
-  | { type: "audit"; entry: AuditLogEntry };
+  | { type: "audit"; entry: AuditLogEntry }
+  | { type: "container.log"; streamId: string; containerId: string; line: string; ended: boolean };
 
 /* ── Request/response bodies ─────────────────────────────────────── */
 

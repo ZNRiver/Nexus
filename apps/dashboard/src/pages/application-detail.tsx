@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { get, post, put, del, patch, downloadBackup } from "@/lib/api";
 import { subscribeDashboard } from "@/lib/ws";
+import { useLiveLogs } from "@/lib/use-live-logs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -123,11 +124,16 @@ export function ApplicationDetailPage() {
   });
   const backups = backupsQ.data;
 
-  const { data: liveLogs } = useQuery({
-    queryKey: ["application-live-logs", id],
-    queryFn: () => get<{ logs: string }>(`/applications/${id}/logs`),
+  // Live container logs: WS streaming with REST seed — no 5s polling.
+  const { text: liveLogsText, live: liveLogsLive, resync: resyncLiveLogs } = useLiveLogs({
     enabled: tab === "logs" && !!data?.application.currentContainerId,
-    refetchInterval: 5000,
+    streamId: data?.application.currentContainerId ? `app:${id}` : null,
+    kind: "application",
+    id,
+    seed: async () => {
+      const res = await get<{ logs: string }>(`/applications/${id}/logs?tail=200`);
+      return res.logs;
+    },
   });
 
   const latestDeployment = data?.deployments?.[0];
@@ -148,7 +154,7 @@ export function ApplicationDetailPage() {
     const el = logsRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [tab, depLogs?.logs.length, liveLogs?.logs.length]);
+  }, [tab, depLogs?.logs.length, liveLogsText.length]);
 
   // Real-time updates.
   useEffect(() => {
@@ -513,9 +519,9 @@ export function ApplicationDetailPage() {
   const active = ["QUEUED", "CLONING", "BUILDING", "PUSHING", "DEPLOYING", "STARTING", "HEALTH_CHECK", "WAITING_FOR_SERVER"].includes(latestDeployment?.status ?? "");
   const logs = useMemo(() => {
     const entries = depLogs?.logs ?? [];
-    const lines = liveLogs?.logs && liveLogs.logs.trim() ? liveLogs.logs.split("\n") : [];
+    const lines = liveLogsText.trim() ? liveLogsText.split("\n") : [];
     return { entries, liveLines: lines };
-  }, [depLogs, liveLogs]);
+  }, [depLogs, liveLogsText]);
 
   if (isLoading || !data || !app) {
     return (
@@ -896,7 +902,7 @@ export function ApplicationDetailPage() {
                 <Terminal className="size-4 text-muted-foreground" />
                 {app.currentContainerId ? "Container logs (live)" : "Build logs"}
               </CardTitle>
-              <span className="text-[11px] text-muted-foreground">{app.currentContainerId ? "refreshing every 5s" : `deployment ${latestDeployment?.id.slice(-8) ?? "—"}`}</span>
+              <span className="text-[11px] text-muted-foreground">{app.currentContainerId ? (liveLogsLive ? "● live" : "connecting…") : `deployment ${latestDeployment?.id.slice(-8) ?? "—"}`}</span>
             </CardHeader>
             <CardContent>
               <LogView entries={logs.entries} liveLines={logs.liveLines} ref={logsRef} empty="No logs yet — deploy the application to see the build pipeline." />

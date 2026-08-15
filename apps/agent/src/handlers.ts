@@ -33,6 +33,8 @@ const ALLOWED_ACTIONS = new Set<AgentAction>([
   "container.unpause",
   "container.remove",
   "container.logs",
+  "container.logs.follow",
+  "container.logs.stop",
   "container.stats",
   "container.exec",
   "image.pull",
@@ -169,6 +171,27 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
         ctx.sendResult(requestId, { logs });
         return;
       }
+      case "container.logs.follow": {
+        const id = guard(String(payload.id ?? ""));
+        const streamId = String(payload.streamId ?? "");
+        if (!streamId) throw new Error("container.logs.follow requires a streamId");
+        const { startContainerLogFollow } = await import("./docker/follow");
+        startContainerLogFollow(
+          docker,
+          { id, streamId, tail: Number(payload.tail ?? 200) },
+          (sid, line) => emitEvent("container.log", sid, { containerId: id, line }),
+          (sid) => emitEvent("container.log", sid, { containerId: id, ended: true }),
+        );
+        ctx.sendResult(requestId, { streamId });
+        return;
+      }
+      case "container.logs.stop": {
+        const streamId = String(payload.streamId ?? "");
+        const { stopContainerLogFollow } = await import("./docker/follow");
+        stopContainerLogFollow(streamId);
+        ctx.sendResult(requestId, { streamId });
+        return;
+      }
       case "container.stats": {
         const name = String(payload.name ?? "");
         const stats = await docker.statsAll();
@@ -189,6 +212,7 @@ export async function dispatch(req: ApiAgentRequest, ctx: HandlerContext): Promi
         const res = await docker.exec(id, cmd, {
           stdin: typeof payload.stdin === "string" ? payload.stdin : undefined,
           timeoutMs: Number(payload.timeoutMs ?? 30000),
+          shell: payload.shell === true,
         });
         ctx.sendResult(requestId, res);
         return;

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import type { Next } from "hono";
 import type { AppContext } from "../context";
 import type { App } from "../types";
 import { ProjectsService } from "../services/projects.service";
-import { GameServersService } from "../services/games.service";
+import { GameServersService, type GameUserPerm } from "../services/games.service";
 import { MonitoringService } from "../services/monitoring.service";
 import { NotificationsService } from "../services/notifications.service";
 import { AuditService } from "../services/audit.service";
@@ -10,7 +11,7 @@ import { SettingsService } from "../services/settings.service";
 import { JobQueue } from "../jobs/queue";
 import { OverviewService } from "../services/overview.service";
 import { listResourceLogs } from "../services/resource-logs.service";
-import { requireAuth, requirePermission, getAuthUser } from "../middleware/auth";
+import { requireAuth, requirePermission, getAuthUser, type AuthContext } from "../middleware/auth";
 import { errors } from "../lib/errors";
 import { parseCreatedAtCursor, parsePageQuery, pid } from "../lib/http";
 
@@ -38,6 +39,44 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
   const audit = new AuditService(ctx.db);
   const settings = new SettingsService(ctx.db);
   const overview = new OverviewService(ctx.db, ctx);
+
+  /**
+   * Sub-user gate for game server routes. Owner/admin always pass; other roles
+   * need a grant row for this server (access) and, when `perm` is given, that
+   * feature permission. `resolveGameId` maps routes whose :id is NOT the game
+   * server id (schedules, backups) back to the owning server.
+   */
+  function requireGamePerm(perm?: GameUserPerm, resolveGameId?: (c: AuthContext) => Promise<string>) {
+    return async (c: AuthContext, next: Next): Promise<void> => {
+      const user = getAuthUser(c);
+      if (!user) throw errors.unauthorized();
+      if (user.role === "owner" || user.role === "admin") {
+        await next();
+        return;
+      }
+      const gameId = resolveGameId ? await resolveGameId(c) : pid(c);
+      const ok = await games.userHasGamePerm(gameId, user.id, perm);
+      if (!ok) {
+        throw errors.forbidden(perm ? `Missing permission: ${perm}` : "You don't have access to this game server");
+      }
+      await next();
+    };
+  }
+  const gameIdFromSchedule = async (c: AuthContext): Promise<string> => {
+    const row = await ctx.db.get<{ game_server_id: string }>(`SELECT game_server_id FROM game_schedules WHERE id = ?`, [pid(c, "scheduleId")]);
+    if (!row) throw errors.notFound("Schedule not found");
+    return row.game_server_id;
+  };
+  const gameIdFromBackup = async (c: AuthContext): Promise<string> => {
+    const row = await ctx.db.get<{ game_server_id: string | null }>(`SELECT game_server_id FROM backups WHERE id = ?`, [pid(c)]);
+    if (!row || !row.game_server_id) throw errors.notFound("Backup not found");
+    return row.game_server_id;
+  };
+  const gameIdFromAllocation = async (c: AuthContext): Promise<string> => {
+    const row = await ctx.db.get<{ game_server_id: string }>(`SELECT game_server_id FROM game_allocations WHERE id = ?`, [pid(c, "allocationId")]);
+    if (!row) throw errors.notFound("Allocation not found");
+    return row.game_server_id;
+  };
 
   /* ── overview ───────────────────────────────────────────────── */
 
@@ -69,9 +108,16 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
 
   /* ── game servers ───────────────────────────────────────────── */
 
-  app.get("/api/v1/game-servers", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers", requireAuth, async (c) => {
+    const user = getAuthUser(c)!;
     const page = parsePageQuery(c);
-    const result = await games.list({ limit: page.limit, cursor: parseCreatedAtCursor(page.cursor) ?? undefined, serverId: c.req.query("serverId") || undefined });
+    const result = await games.list({
+      limit: page.limit,
+      cursor: parseCreatedAtCursor(page.cursor) ?? undefined,
+      serverId: c.req.query("serverId") || undefined,
+      // Non-admins only see servers they were granted access to.
+      userId: user.role === "owner" || user.role === "admin" ? undefined : user.id,
+    });
     return c.json({ success: true, ...result });
   });
 
@@ -83,29 +129,29 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, gameServer: game });
   });
 
-  app.get("/api/v1/game-servers/:id", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id", requireAuth, requireGamePerm(), async (c) => {
     const game = await games.getPublic(pid(c));
     const server = await ctx.db.get(`SELECT * FROM servers WHERE id = ?`, [game.serverId]);
     const system = await monitoring.latest(game.serverId);
     return c.json({ success: true, gameServer: game, server, system });
   });
 
-  app.post("/api/v1/game-servers/:id/start", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/start", requireAuth, requireGamePerm("startstop"), async (c) => {
     const game = await games.start(pid(c));
     return c.json({ success: true, gameServer: game });
   });
 
-  app.post("/api/v1/game-servers/:id/stop", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/stop", requireAuth, requireGamePerm("startstop"), async (c) => {
     const game = await games.stop(pid(c));
     return c.json({ success: true, gameServer: game });
   });
 
-  app.post("/api/v1/game-servers/:id/restart", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/restart", requireAuth, requireGamePerm("startstop"), async (c) => {
     const result = await games.restart(pid(c));
     return c.json({ success: true, result });
   });
 
-  app.post("/api/v1/game-servers/:id/exec", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/exec", requireAuth, requireGamePerm("console"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ cmd: z.array(z.string().min(1)).min(1) }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -113,13 +159,13 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...result });
   });
 
-  app.get("/api/v1/game-servers/:id/logs", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/logs", requireAuth, requireGamePerm(), async (c) => {
     const tail = parseInt(c.req.query("tail") ?? "200", 10);
     const logs = await games.logs(pid(c), Math.min(500, Math.max(20, tail)));
     return c.json({ success: true, logs });
   });
 
-  app.get("/api/v1/game-servers/:id/stats", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/stats", requireAuth, requireGamePerm(), async (c) => {
     const stats = await games.stats(pid(c));
     return c.json({ success: true, ...stats });
   });
@@ -132,20 +178,20 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
 
   /* ── game server: file manager ──────────────────────────────── */
 
-  app.get("/api/v1/game-servers/:id/files", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/files", requireAuth, requireGamePerm(), async (c) => {
     const path = c.req.query("path") || "/";
     const result = await games.listFiles(pid(c), path);
     return c.json({ success: true, ...result });
   });
 
-  app.get("/api/v1/game-servers/:id/files/content", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/files/content", requireAuth, requireGamePerm(), async (c) => {
     const path = c.req.query("path") || "";
     if (!path) throw errors.validation({ path: "path is required" });
     const result = await games.readFile(pid(c), path);
     return c.json({ success: true, ...result });
   });
 
-  app.post("/api/v1/game-servers/:id/files/write", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/files/write", requireAuth, requireGamePerm("files"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ path: z.string().min(1), content: z.string() }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -153,7 +199,7 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...result });
   });
 
-  app.post("/api/v1/game-servers/:id/files/mkdir", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/files/mkdir", requireAuth, requireGamePerm("files"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ path: z.string().min(1) }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -161,7 +207,7 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...result });
   });
 
-  app.post("/api/v1/game-servers/:id/files/delete", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/files/delete", requireAuth, requireGamePerm("files"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ path: z.string().min(1), recursive: z.boolean().optional() }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -169,7 +215,7 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, ...result });
   });
 
-  app.post("/api/v1/game-servers/:id/files/rename", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/files/rename", requireAuth, requireGamePerm("files"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ path: z.string().min(1), newName: z.string().min(1) }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -187,12 +233,12 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     onlyOnline: z.boolean().optional(),
   });
 
-  app.get("/api/v1/game-servers/:id/schedules", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/schedules", requireAuth, requireGamePerm(), async (c) => {
     const items = await games.listSchedules(pid(c));
     return c.json({ success: true, items });
   });
 
-  app.post("/api/v1/game-servers/:id/schedules", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/schedules", requireAuth, requireGamePerm("schedules"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = scheduleSchema.safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -200,7 +246,7 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, schedule });
   });
 
-  app.patch("/api/v1/game-schedules/:scheduleId", requireAuth, requirePermission("game.write"), async (c) => {
+  app.patch("/api/v1/game-schedules/:scheduleId", requireAuth, requireGamePerm("schedules", gameIdFromSchedule), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = scheduleSchema.partial().safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
@@ -208,67 +254,67 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, schedule });
   });
 
-  app.delete("/api/v1/game-schedules/:scheduleId", requireAuth, requirePermission("game.write"), async (c) => {
+  app.delete("/api/v1/game-schedules/:scheduleId", requireAuth, requireGamePerm("schedules", gameIdFromSchedule), async (c) => {
     await games.deleteSchedule(pid(c, "scheduleId"));
     return c.json({ success: true });
   });
 
-  app.post("/api/v1/game-schedules/:scheduleId/run", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-schedules/:scheduleId/run", requireAuth, requireGamePerm("schedules", gameIdFromSchedule), async (c) => {
     const result = await games.runScheduleNow(pid(c, "scheduleId"));
     return c.json({ success: true, ...result });
   });
 
   /* ── game server: backups ───────────────────────────────────── */
 
-  app.post("/api/v1/game-servers/:id/backup", requireAuth, requirePermission("backup.create"), async (c) => {
+  app.post("/api/v1/game-servers/:id/backup", requireAuth, requireGamePerm("backups"), async (c) => {
     const backup = await games.createBackup(pid(c));
     return c.json({ success: true, backup });
   });
 
-  app.get("/api/v1/game-servers/:id/backups", requireAuth, requirePermission("backup.create"), async (c) => {
+  app.get("/api/v1/game-servers/:id/backups", requireAuth, requireGamePerm("backups"), async (c) => {
     const items = await games.listBackups(pid(c));
     return c.json({ success: true, items });
   });
 
-  app.put("/api/v1/backups/:id/lock", requireAuth, requirePermission("backup.create"), async (c) => {
+  app.put("/api/v1/backups/:id/lock", requireAuth, requireGamePerm("backups", gameIdFromBackup), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const locked = body.locked === true;
     const backup = await games.setBackupLocked(pid(c), locked);
     return c.json({ success: true, backup });
   });
 
-  app.delete("/api/v1/game-backups/:id", requireAuth, requirePermission("backup.delete"), async (c) => {
+  app.delete("/api/v1/game-backups/:id", requireAuth, requireGamePerm("backups", gameIdFromBackup), async (c) => {
     await games.deleteBackup(pid(c));
     return c.json({ success: true });
   });
 
   /* ── game server: network allocations ───────────────────────── */
 
-  app.get("/api/v1/game-servers/:id/allocations", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/allocations", requireAuth, requireGamePerm(), async (c) => {
     const items = await games.listAllocations(pid(c));
     return c.json({ success: true, items });
   });
 
-  app.patch("/api/v1/game-allocations/:allocationId", requireAuth, requirePermission("game.write"), async (c) => {
+  app.patch("/api/v1/game-allocations/:allocationId", requireAuth, requireGamePerm("network", gameIdFromAllocation), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const notes = typeof body.notes === "string" ? body.notes : "";
     const allocation = await games.updateAllocationNotes(pid(c, "allocationId"), notes);
     return c.json({ success: true, allocation });
   });
 
-  app.post("/api/v1/game-servers/:id/allocations/:allocationId/primary", requireAuth, requirePermission("game.write"), async (c) => {
+  app.post("/api/v1/game-servers/:id/allocations/:allocationId/primary", requireAuth, requireGamePerm("network"), async (c) => {
     const items = await games.setPrimaryAllocation(pid(c), pid(c, "allocationId"));
     return c.json({ success: true, items });
   });
 
   /* ── game server: startup ───────────────────────────────────── */
 
-  app.get("/api/v1/game-servers/:id/startup", requireAuth, requirePermission("game.read"), async (c) => {
+  app.get("/api/v1/game-servers/:id/startup", requireAuth, requireGamePerm(), async (c) => {
     const result = await games.getStartup(pid(c));
     return c.json({ success: true, ...result });
   });
 
-  app.put("/api/v1/game-servers/:id/startup", requireAuth, requirePermission("game.write"), async (c) => {
+  app.put("/api/v1/game-servers/:id/startup", requireAuth, requireGamePerm("startup"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({
       image: z.string().optional(),
@@ -277,6 +323,45 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
     const result = await games.updateStartup(pid(c), parsed.data);
     return c.json({ success: true, ...result });
+  });
+
+  /* ── game server: sub-users ─────────────────────────────────── */
+
+  const gameUserSchema = z.object({
+    userId: z.string().min(1),
+    permissions: z.array(z.string()).optional().default([]),
+  });
+
+  app.get("/api/v1/game-servers/:id/users", requireAuth, requireGamePerm(), async (c) => {
+    const result = await games.listUsers(pid(c));
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/users", requireAuth, requirePermission("game.write"), async (c) => {
+    const user = getAuthUser(c)!;
+    if (user.role !== "owner" && user.role !== "admin") throw errors.forbidden("Only admins can manage game server users");
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = gameUserSchema.safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const grant = await games.grantUser(pid(c), parsed.data.userId, parsed.data.permissions);
+    return c.json({ success: true, grant });
+  });
+
+  app.patch("/api/v1/game-server-users/:grantId", requireAuth, requirePermission("game.write"), async (c) => {
+    const user = getAuthUser(c)!;
+    if (user.role !== "owner" && user.role !== "admin") throw errors.forbidden("Only admins can manage game server users");
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ permissions: z.array(z.string()).optional().default([]) }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const grant = await games.updateUserPermissions(pid(c, "grantId"), parsed.data.permissions);
+    return c.json({ success: true, grant });
+  });
+
+  app.delete("/api/v1/game-servers/:id/users/:userId", requireAuth, requirePermission("game.write"), async (c) => {
+    const user = getAuthUser(c)!;
+    if (user.role !== "owner" && user.role !== "admin") throw errors.forbidden("Only admins can manage game server users");
+    await games.revokeUser(pid(c), pid(c, "userId"));
+    return c.json({ success: true });
   });
 
   /* ── monitoring ─────────────────────────────────────────────── */

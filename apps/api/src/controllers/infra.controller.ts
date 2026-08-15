@@ -16,14 +16,13 @@ export function registerInfraRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, items: results });
   });
 
-  app.post("/api/v1/containers/:id/:action", requireAuth, requirePermission("infra.write"), async (c) => {
-    const action = pid(c, "action");
-    const valid = ["start", "stop", "restart", "pause", "unpause", "remove"];
-    if (!valid.includes(action)) throw errors.badRequest(`Unsupported container action: ${action}`);
+  app.post("/api/v1/containers/:id/exec", requireAuth, requirePermission("infra.write"), async (c) => {
     const serverId = c.req.query("serverId");
     if (!serverId) throw errors.validation({ serverId: "serverId query param is required" });
-    const body = await c.req.json().catch(() => ({})) as { force?: boolean; volumes?: boolean };
-    const result = await infra.containerAction(serverId, pid(c), action as never, { force: body.force, volumes: body.volumes });
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ cmd: z.array(z.string()).min(1) }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const result = await infra.containerExec(serverId, pid(c), parsed.data.cmd);
     return c.json({ success: true, ...result });
   });
 
@@ -41,13 +40,14 @@ export function registerInfraRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, data });
   });
 
-  app.post("/api/v1/containers/:id/exec", requireAuth, requirePermission("infra.write"), async (c) => {
+  app.post("/api/v1/containers/:id/:action", requireAuth, requirePermission("infra.write"), async (c) => {
+    const action = pid(c, "action");
+    const valid = ["start", "stop", "restart", "pause", "unpause", "remove"];
+    if (!valid.includes(action)) throw errors.badRequest(`Unsupported container action: ${action}`);
     const serverId = c.req.query("serverId");
     if (!serverId) throw errors.validation({ serverId: "serverId query param is required" });
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = z.object({ cmd: z.array(z.string()).min(1) }).safeParse(body);
-    if (!parsed.success) throw errors.validation(parsed.error.flatten());
-    const result = await infra.containerExec(serverId, pid(c), parsed.data.cmd);
+    const body = await c.req.json().catch(() => ({})) as { force?: boolean; volumes?: boolean };
+    const result = await infra.containerAction(serverId, pid(c), action as never, { force: body.force, volumes: body.volumes });
     return c.json({ success: true, ...result });
   });
 

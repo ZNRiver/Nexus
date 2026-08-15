@@ -520,6 +520,7 @@ export class DatabasesService {
       id: row.container_id,
       cmd,
       timeoutMs: 30000,
+      shell: true,
     }) as { output: string; exitCode: number };
     await this.ctx.audit({ action: "database.exec", resourceType: "database", resourceId: id, resourceName: row.name, serverId: row.server_id, metadata: { cmd } });
     return result;

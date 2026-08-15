@@ -53,7 +53,8 @@ export type AgentEventType =
   | "job.progress"
   | "resource.log"
   | "database.status"
-  | "game.status";
+  | "game.status"
+  | "container.log";
 
 export interface AgentEvent {
   type: AgentEventType;
@@ -86,6 +87,8 @@ export type AgentAction =
   | "container.unpause"
   | "container.remove"
   | "container.logs"
+  | "container.logs.follow"
+  | "container.logs.stop"
   | "container.stats"
   | "container.exec"
   | "image.pull"
@@ -138,6 +141,19 @@ export interface ApiAgentCancel {
 export type ApiToAgentMessage = ApiAgentRequest | ApiAgentCancel;
 
 /* ── Action payloads ─────────────────────────────────────────────── */
+
+export interface ContainerLogsFollowPayload {
+  /** container id to follow */
+  id: string;
+  /** opaque id used to route streamed lines back to a dashboard subscriber */
+  streamId: string;
+  /** how many existing lines to include at stream start */
+  tail?: number;
+}
+
+export interface ContainerLogsStopPayload {
+  streamId: string;
+}
 
 export interface DeploymentExecutePayload {
   deploymentId: string;
@@ -366,6 +382,8 @@ export interface AgentActionResultMap {
   "container.unpause": { id: string };
   "container.remove": { id: string };
   "container.logs": { logs: string };
+  "container.logs.follow": { streamId: string };
+  "container.logs.stop": { streamId: string };
   "container.stats": { cpuPercent: number; memoryUsageBytes: number; memoryLimitBytes: number };
   "container.exec": { output: string; exitCode: number };
   "image.pull": { image: string };
