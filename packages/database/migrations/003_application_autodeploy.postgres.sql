@@ -1,0 +1,1 @@
+ALTER TABLE applications ADD COLUMN autodeploy BOOLEAN NOT NULL DEFAULT false;

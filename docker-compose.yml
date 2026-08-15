@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────
+# NEXUS — full stack: control plane (API + dashboard) + Postgres + Redis
+#
+#   docker compose up -d --build
+#
+# The api service serves the dashboard on :8080 and spawns the local
+# NEXUS Agent in-process. The Docker socket mount gives the agent
+# access to the host engine — remove it for a dashboard-only install.
+# ─────────────────────────────────────────────────────────────
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      NODE_ENV: production
+      # Production → PostgreSQL. Set to a sqlite: path for a single-file dev DB.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://nexus:nexus@postgres:5432/nexus}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in your .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in your .env}
+      API_URL: http://localhost:8080
+      AGENT_DATA_DIR: /opt/nexus/agent
+      NEXUS_DB_PATH: /data/nexus
+    volumes:
+      - nexus-data:/data/nexus
+      - nexus-agent:/opt/nexus/agent
+      # Let the local agent manage containers on the host.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+    volumes:
+      - nexus-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus} -d ${POSTGRES_DB:-nexus}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - nexus-redis:/data
+
+volumes:
+  nexus-postgres:
+  nexus-redis:
+  nexus-data:
+  nexus-agent:

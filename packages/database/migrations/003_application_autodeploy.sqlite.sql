@@ -1,0 +1,1 @@
+ALTER TABLE applications ADD COLUMN autodeploy INTEGER NOT NULL DEFAULT 0;

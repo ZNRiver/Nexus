@@ -1,0 +1,1 @@
+ALTER TABLE applications ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'MANUAL';

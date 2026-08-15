@@ -1,0 +1,26 @@
+{
+  "name": "@nexus/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@nexus/config": "workspace:*",
+    "@nexus/database": "workspace:*",
+    "@nexus/logger": "workspace:*",
+    "@nexus/types": "workspace:*",
+    "hono": "^4.6.14",
+    "ssh2": "^1.16.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/ssh2": "^1.15.1",
+    "@types/bun": "latest",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+.git
+.env
+.env.*
+!.env.example
+data
+**/data
+*.log
+apps/dashboard/dist
+apps/api/data
+
+.tmp

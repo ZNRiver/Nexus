@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── NEXUS design tokens ─────────────────────────────────────────── */
+
+:root,
+[data-theme="light"] {
+  --background: 249 249 251;
+  --foreground: 24 24 27;
+  --card: 255 255 255;
+  --card-foreground: 24 24 27;
+  --popover: 255 255 255;
+  --popover-foreground: 24 24 27;
+  --primary: 79 70 229;
+  --primary-foreground: 255 255 255;
+  --secondary: 244 244 245;
+  --secondary-foreground: 39 39 42;
+  --muted: 244 244 245;
+  --muted-foreground: 113 113 122;
+  --accent: 244 244 245;
+  --accent-foreground: 24 24 27;
+  --destructive: 220 38 38;
+  --destructive-foreground: 255 255 255;
+  --success: 5 150 105;
+  --warning: 217 119 6;
+  --border: 228 228 231;
+  --input: 228 228 231;
+  --ring: 79 70 229;
+  --th-overlay: rgba(24, 24, 27, 0.35);
+}
+
+[data-theme="dim"] {
+  --background: 20 20 22;
+  --foreground: 231 231 234;
+  --card: 27 27 30;
+  --card-foreground: 231 231 234;
+  --popover: 27 27 30;
+  --popover-foreground: 231 231 234;
+  --primary: 139 131 240;
+  --primary-foreground: 13 13 18;
+  --secondary: 38 38 42;
+  --secondary-foreground: 231 231 234;
+  --muted: 38 38 42;
+  --muted-foreground: 156 156 163;
+  --accent: 44 44 49;
+  --accent-foreground: 231 231 234;
+  --destructive: 239 68 68;
+  --destructive-foreground: 255 255 255;
+  --success: 52 211 153;
+  --warning: 245 158 11;
+  --border: 42 42 46;
+  --input: 42 42 46;
+  --ring: 139 131 240;
+  --th-overlay: rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="dark"] {
+  --background: 0 0 0;
+  --foreground: 237 237 240;
+  --card: 13 13 15;
+  --card-foreground: 237 237 240;
+  --popover: 13 13 15;
+  --popover-foreground: 237 237 240;
+  --primary: 124 116 240;
+  --primary-foreground: 10 10 14;
+  --secondary: 26 26 30;
+  --secondary-foreground: 237 237 240;
+  --muted: 26 26 30;
+  --muted-foreground: 148 148 156;
+  --accent: 30 30 35;
+  --accent-foreground: 237 237 240;
+  --destructive: 239 68 68;
+  --destructive-foreground: 255 255 255;
+  --success: 52 211 153;
+  --warning: 245 158 11;
+  --border: 30 30 34;
+  --input: 30 30 34;
+  --ring: 124 116 240;
+  --th-overlay: rgba(0, 0, 0, 0.6);
+}
+
+@layer base {
+  * {
+    border-color: rgb(var(--border) / 0.5);
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background-color: rgb(var(--background));
+    color: rgb(var(--foreground));
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  ::selection {
+    background-color: rgb(var(--primary) / 0.2);
+  }
+  /* thin, unobtrusive scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border)) transparent;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  /* Interactive card: raises the border + shadow together on hover. */
+  .card-hover {
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .card-hover:hover {
+    border-color: rgb(var(--border));
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.07);
+  }
+  /* Row inside a list: clearer background lift on hover. */
+  .row-hover {
+    transition: background-color 0.12s ease;
+  }
+  .row-hover:hover {
+    background-color: rgb(var(--foreground) / 0.05);
+  }
+}
+
+/* Terminal / log surfaces */
+.nexus-terminal {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
