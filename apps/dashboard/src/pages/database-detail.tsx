@@ -19,6 +19,7 @@ import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Skeleton } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
+import { EnvTextEditor } from "@/components/env-text-editor";
 import { formatBytes, formatTime, timeAgo } from "@/lib/format";
 import { isServerLive, serverUnavailableReason } from "@/lib/status";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
@@ -29,7 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/Switch";
 import { cn } from "@/lib/utils";
-import type { Backup, Database, DatabaseConnectionInfo } from "@nexus/types";
+import type { Backup, Database, DatabaseConnectionInfo, EnvironmentVariable } from "@nexus/types";
 
 type TabKey = "general" | "console" | "database" | "environment" | "logs" | "monitoring" | "backups" | "advanced";
 
@@ -107,7 +108,7 @@ export function DatabaseDetailPage() {
 
   const envQ = useQuery({
     queryKey: ["database-env", id],
-    queryFn: () => get<{ env: { key: string; value: string }[] }>(`/databases/${id}/env`),
+    queryFn: () => get<{ items: EnvironmentVariable[]; environmentText: string | null }>(`/databases/${id}/environment`),
     enabled: tab === "environment",
     retry: false,
   });
@@ -462,28 +463,22 @@ export function DatabaseDetailPage() {
         )}
 
         {tab === "environment" && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">Environment</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {envQ.isLoading ? (
-                <Skeleton className="h-24" />
-              ) : envQ.error ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">{(envQ.error as Error).message}</p>
-              ) : (
-                <div className="divide-y divide-border/50 rounded-xl border border-border/60">
-                  {(envQ.data?.env ?? []).map((e) => (
-                    <div key={e.key} className="flex items-center justify-between gap-4 px-4 py-3">
-                      <span className="font-mono text-[13px] text-muted-foreground">{e.key}</span>
-                      <span className="font-mono text-[13px]">{e.value}</span>
-                    </div>
-                  ))}
-                  {(envQ.data?.env ?? []).length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No environment variables.</p>}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <div className="space-y-6">
+            {envQ.isLoading ? (
+              <Skeleton className="h-24" />
+            ) : envQ.error ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">{(envQ.error as Error).message}</p>
+            ) : (
+              <EnvTextEditor
+                items={envQ.data?.items}
+                environmentText={envQ.data?.environmentText}
+                resourceId={id}
+                saveUrl={(i) => `/databases/${i}/environment`}
+                revealUrl={(i, e) => `/databases/${i}/environment/${e}/reveal`}
+                onSaved={() => envQ.refetch()}
+              />
+            )}
+          </div>
         )}
 
         {tab === "logs" && (

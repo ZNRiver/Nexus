@@ -1,7 +1,8 @@
-import type { BackupRow, DatabaseCredentialRow, DatabaseRow, DbConnection, JobRow, ServerRow } from "@nexus/database";
+import type { BackupRow, DatabaseCredentialRow, DatabaseRow, DbConnection, EnvironmentVariableRow, JobRow, ServerRow } from "@nexus/database";
 import { decrypt, encrypt, newId, newToken } from "../lib/crypto";
+import { maskEnvTextSecrets } from "../lib/env-text";
 import { errors } from "../lib/errors";
-import type { Backup, CreateDatabaseInput, Database, DatabaseConnectionInfo, DatabaseStatus, DatabaseType } from "@nexus/types";
+import type { Backup, CreateDatabaseInput, Database, DatabaseConnectionInfo, DatabaseStatus, DatabaseType, EnvironmentVariable } from "@nexus/types";
 import type { AppContext } from "../context";
 import { JobQueue } from "../jobs/queue";
 import { eventHub } from "../lib/events";
@@ -80,6 +81,7 @@ export function toDatabase(row: DatabaseRow): Database {
     maxConnections: row.max_connections,
     cpuLimit: row.cpu_limit,
     memoryLimitBytes: row.memory_limit_bytes,
+    environmentText: row.environment_text ?? null,
     backupSchedule: {
       enabled: !!row.backup_schedule_enabled,
       cron: row.backup_schedule_cron ?? "0 2 * * *",
@@ -180,13 +182,14 @@ export class DatabasesService {
       backup_retention: 7,
       backup_next_run_at: null,
       backup_last_run_at: null,
+      environment_text: null,
       created_at: now,
       updated_at: now,
     };
     await this.db.run(
-      `INSERT INTO databases (id, project_id, server_id, type, version, name, description, db_name, username, password_encrypted, port, internal_port, status, image, container_id, volume_name, storage_limit_bytes, max_connections, cpu_limit, memory_limit_bytes, backup_schedule_enabled, backup_schedule_cron, backup_retention, backup_next_run_at, backup_last_run_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [row.id, row.project_id, row.server_id, row.type, row.version, row.name, row.description, row.db_name, row.username, row.password_encrypted, row.port, row.internal_port, row.status, row.image, row.container_id, row.volume_name, row.storage_limit_bytes, row.max_connections, row.cpu_limit, row.memory_limit_bytes, row.backup_schedule_enabled, row.backup_schedule_cron, row.backup_retention, row.backup_next_run_at, row.backup_last_run_at, row.created_at, row.updated_at],
+      `INSERT INTO databases (id, project_id, server_id, type, version, name, description, db_name, username, password_encrypted, port, internal_port, status, image, container_id, volume_name, storage_limit_bytes, max_connections, cpu_limit, memory_limit_bytes, backup_schedule_enabled, backup_schedule_cron, backup_retention, backup_next_run_at, backup_last_run_at, environment_text, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [row.id, row.project_id, row.server_id, row.type, row.version, row.name, row.description, row.db_name, row.username, row.password_encrypted, row.port, row.internal_port, row.status, row.image, row.container_id, row.volume_name, row.storage_limit_bytes, row.max_connections, row.cpu_limit, row.memory_limit_bytes, row.backup_schedule_enabled, row.backup_schedule_cron, row.backup_retention, row.backup_next_run_at, row.backup_last_run_at, row.environment_text, row.created_at, row.updated_at],
     );
     await this.db.run(
       `INSERT INTO database_credentials (id, database_id, username, password_encrypted, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -208,6 +211,15 @@ export class DatabasesService {
     const def = DATABASE_IMAGES[row.type as DatabaseType];
     const dbName = row.db_name ?? row.name;
     const env = def.env(row.username ?? "root", password, dbName);
+    // User-defined custom variables win over the computed defaults.
+    const custom = await this.db.all<EnvironmentVariableRow>(`SELECT * FROM environment_variables WHERE database_id = ?`, [row.id]);
+    for (const c of custom) {
+      try {
+        env[c.var_key] = decrypt(c.value_encrypted, this.ctx.config.encryptionKey);
+      } catch {
+        /* skip corrupted */
+      }
+    }
     const containerName = `nexus-db-${row.id.replace("db_", "")}`;
     const requestedPort = row.port ?? def.internalPort;
     // The requested host port may already be taken on the target (e.g. a
@@ -550,17 +562,107 @@ export class DatabasesService {
     };
   }
 
-  /** Effective environment of the database container (secrets masked). */
+  /** Effective environment of the database container (defaults + user vars, secrets masked). */
   async env(id: string): Promise<{ key: string; value: string }[]> {
     const row = await this.get(id);
     const password = row.password_encrypted ? decrypt(row.password_encrypted, this.ctx.config.encryptionKey) : "";
     const def = DATABASE_IMAGES[row.type as DatabaseType];
     const dbName = row.db_name ?? row.name;
     const env = def.env(row.username ?? "root", password, dbName);
+    // User-defined custom variables win over the computed defaults.
+    const custom = await this.db.all<EnvironmentVariableRow>(`SELECT * FROM environment_variables WHERE database_id = ?`, [id]);
+    for (const c of custom) {
+      try {
+        env[c.var_key] = decrypt(c.value_encrypted, this.ctx.config.encryptionKey);
+      } catch {
+        /* skip corrupted */
+      }
+    }
     return Object.entries(env).map(([key, value]) => ({
       key,
       value: value === password ? "••••••••" : value,
     }));
+  }
+
+  /* ── custom environment variables (raw .env editor) ──────────── */
+
+  async listCustomEnvVars(databaseId: string): Promise<EnvironmentVariable[]> {
+    await this.get(databaseId);
+    const rows = await this.db.all<EnvironmentVariableRow>(`SELECT * FROM environment_variables WHERE database_id = ? ORDER BY created_at ASC`, [databaseId]);
+    return rows.map((r) => ({
+      id: r.id,
+      applicationId: null,
+      databaseId: r.database_id,
+      gameServerId: r.game_server_id,
+      key: r.var_key,
+      valueMasked: this.maskValue(r.value_encrypted),
+      isSecret: !!r.is_secret,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  /** Replace the whole custom env from a text-editor save (KEY=VALUE lines). */
+  async syncEnvVars(databaseId: string, variables: { key: string; value: string; isSecret?: boolean }[], rawText?: string): Promise<EnvironmentVariable[]> {
+    await this.get(databaseId);
+    const now = new Date().toISOString();
+    const seen = new Set<string>();
+    const saved: EnvironmentVariable[] = [];
+    const result = await this.db.transaction(async (tx) => {
+      for (const v of variables) {
+        const key = v.key.trim();
+        if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+        if (seen.has(key)) continue; // last occurrence wins
+        seen.add(key);
+        const existing = await tx.get<EnvironmentVariableRow>(`SELECT * FROM environment_variables WHERE database_id = ? AND var_key = ?`, [databaseId, key]);
+        const isSecret = !!v.isSecret;
+        let encrypted: string;
+        if (existing && /^[\u2022*]+$/.test(v.value.trim())) {
+          // Masked value sent back from the text editor — keep the stored value.
+          encrypted = existing.value_encrypted;
+        } else {
+          encrypted = encrypt(v.value, this.ctx.config.encryptionKey);
+        }
+        if (existing) {
+          await tx.run(`UPDATE environment_variables SET value_encrypted = ?, is_secret = ?, updated_at = ? WHERE id = ?`, [encrypted, isSecret ? 1 : 0, now, existing.id]);
+          saved.push({ id: existing.id, applicationId: null, databaseId, gameServerId: existing.game_server_id, key, valueMasked: this.maskValue(encrypted), isSecret, updatedAt: now });
+        } else {
+          const id = newId("env");
+          await tx.run(
+            `INSERT INTO environment_variables (id, application_id, database_id, game_server_id, var_key, value_encrypted, is_secret, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?, ?, ?, ?)`,
+            [id, databaseId, key, encrypted, isSecret ? 1 : 0, now, now],
+          );
+          saved.push({ id, applicationId: null, databaseId, gameServerId: null, key, valueMasked: this.maskValue(encrypted), isSecret, updatedAt: now });
+        }
+      }
+      // Remove variables that were deleted from the editor.
+      const keys = variables.map((v) => v.key.trim()).filter(Boolean);
+      if (keys.length === 0) {
+        await tx.run(`DELETE FROM environment_variables WHERE database_id = ?`, [databaseId]);
+      } else {
+        await tx.run(`DELETE FROM environment_variables WHERE database_id = ? AND var_key NOT IN (${keys.map(() => "?").join(",")})`, [databaseId, ...keys]);
+      }
+      // Persist the raw editor text (comments + ordering). Secret values are masked server-side.
+      if (rawText !== undefined) {
+        const secretKeys = new Set(variables.filter((v) => v.isSecret).map((v) => v.key.trim()).filter(Boolean));
+        await tx.run(`UPDATE databases SET environment_text = ?, updated_at = ? WHERE id = ?`, [maskEnvTextSecrets(rawText, secretKeys), now, databaseId]);
+      }
+      return saved;
+    });
+    await this.ctx.audit({ action: "environment.sync", resourceType: "database", resourceId: databaseId, resourceName: `${variables.length} variables`, serverId: null });
+    return result;
+  }
+
+  async revealEnvValue(databaseId: string, envId: string): Promise<{ value: string }> {
+    const row = await this.db.get<EnvironmentVariableRow>(`SELECT * FROM environment_variables WHERE id = ? AND database_id = ?`, [envId, databaseId]);
+    if (!row) throw errors.notFound("Environment variable not found");
+    return { value: decrypt(row.value_encrypted, this.ctx.config.encryptionKey) };
+  }
+
+  private maskValue(encrypted: string): string {
+    const value = decrypt(encrypted, this.ctx.config.encryptionKey);
+    if (value.length === 0) return "";
+    if (value.length <= 6) return "\u2022".repeat(value.length);
+    return `${value.slice(0, 2)}${"\u2022".repeat(8)}${value.slice(-1)}`;
   }
 
   async remove(id: string, opts: { destroyData?: boolean } = {}): Promise<void> {

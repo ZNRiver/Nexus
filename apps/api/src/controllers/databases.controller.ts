@@ -162,6 +162,28 @@ export function registerDatabaseRoutes(app: App, ctx: AppContext): void {
     return c.json({ success: true, env });
   });
 
+  /* ── custom environment variables (raw .env editor) ───────────── */
+
+  app.get("/api/v1/databases/:id/environment", requireAuth, requirePermission("database.read"), async (c) => {
+    const id = pid(c);
+    const [items, row] = await Promise.all([dbs.listCustomEnvVars(id), dbs.get(id)]);
+    return c.json({ success: true, items, environmentText: row.environment_text ?? null });
+  });
+
+  app.put("/api/v1/databases/:id/environment", requireAuth, requirePermission("database.write"), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ variables: z.array(z.object({ key: z.string().min(1), value: z.string(), isSecret: z.boolean().optional() })), rawText: z.string().optional() }).safeParse(body);
+    if (!parsed.success) throw errors.validation(parsed.error.flatten());
+    const variables = await dbs.syncEnvVars(pid(c), parsed.data.variables, parsed.data.rawText);
+    return c.json({ success: true, variables });
+  });
+
+  app.post("/api/v1/databases/:id/environment/:envId/reveal", requireAuth, requirePermission("database.read"), async (c) => {
+    const result = await dbs.revealEnvValue(pid(c), pid(c, "envId"));
+    await ctx.audit({ action: "environment.reveal", resourceType: "database", resourceId: pid(c), resourceName: pid(c, "envId") });
+    return c.json({ success: true, ...result });
+  });
+
   /* ── scheduled backups ────────────────────────────────────────── */
 
   const updateBackupScheduleSchema = z.object({

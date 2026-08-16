@@ -272,6 +272,8 @@ export interface Database {
   memoryLimitBytes?: number | null;
   /** scheduled automatic backups (null when the feature is untouched) */
   backupSchedule?: DatabaseBackupSchedule | null;
+  /** Raw .env editor text (comments + ordering). Secret values are masked with dots. */
+  environmentText?: string | null;
   createdAt: string;
   updatedAt: string;
 }
