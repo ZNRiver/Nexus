@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Database as DbIcon, Plus, Loader2, CircleHelp, ArrowRight } from "lucide-react";
+import { Database as DbIcon, Plus, Loader2, CircleHelp } from "lucide-react";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
 import { get, post } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -15,7 +15,6 @@ import { PageHeader } from "@/components/page-header";
 import { TableSkeleton } from "@/components/skeleton";
 import { EmptyState } from "@/components/empty-state";
 import { useToast } from "@/components/toast";
-import { OperationLogPanel } from "@/components/operation-log-panel";
 import { cn } from "@/lib/utils";
 import { formatBytes, timeAgo } from "@/lib/format";
 import type { Database, DatabaseType, Project, Server } from "@nexus/types";
@@ -41,13 +40,10 @@ const HELP: Record<string, string> = {
 };
 
 export function DatabasesPage({ mode }: { mode?: string }) {
-  const navigate = useNavigate();
   const { toast } = useToast();
   const [params, setParams] = useSearchParams();
   const [open, setOpen] = useState(mode === "new" || params.get("new") === "1");
   const [creating, setCreating] = useState(false);
-  // Newly created database id — shows the live progress panel while it provisions.
-  const [progressDb, setProgressDb] = useState<string | null>(null);
   const modalContentRef = useRef<HTMLDivElement>(null);
   const [form, setForm] = useState({
     serverId: "",
@@ -91,7 +87,7 @@ export function DatabasesPage({ mode }: { mode?: string }) {
   const create = async () => {
     setCreating(true);
     try {
-      const res = await post<{ database: { id: string } }>("/databases", {
+      await post("/databases", {
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         serverId: form.serverId,
@@ -105,7 +101,6 @@ export function DatabasesPage({ mode }: { mode?: string }) {
       toast("success", "Database created", `${form.name} — provisioning the container…`);
       setOpen(false);
       setParams({}, { replace: true });
-      setProgressDb(res.database.id);
       setCreating(false);
     } catch (err) {
       toast("error", "Creation failed", err instanceof Error ? err.message : "Unknown error");
@@ -127,7 +122,7 @@ export function DatabasesPage({ mode }: { mode?: string }) {
         }
       />
 
-      <div className={cn("mt-0", progressDb && "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]")}>
+      <div className="mt-0">
         <div>
           {isLoading ? (
             <TableSkeleton rows={6} cols={5} />
@@ -169,17 +164,6 @@ export function DatabasesPage({ mode }: { mode?: string }) {
           )}
         </div>
 
-        {progressDb && (
-          <div className="lg:sticky lg:top-6">
-            <OperationLogPanel resourceType="database" resourceId={progressDb} />
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="text-[11px] text-muted-foreground">This panel shows the container provisioning progress live.</p>
-              <Button size="sm" variant="outline" onClick={() => navigate(`/databases/${progressDb}`)}>
-                Open database <ArrowRight className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        )}
       </div>
 
       <Modal

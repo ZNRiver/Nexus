@@ -163,7 +163,7 @@ export function CustomSelect<T extends string>({
                 : { bottom: menuPosition.bottom }),
             }}
           >
-            <div className="max-h-full overflow-y-auto py-1.5">
+            <div className="overflow-y-auto py-1.5" style={{ maxHeight: menuPosition.maxHeight }}>
               {options.map((option) => {
                 const isSelected = option.value === value;
                 return (

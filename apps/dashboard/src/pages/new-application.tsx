@@ -13,7 +13,6 @@ import { CustomSelect } from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/Switch";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/components/toast";
-import { OperationLogPanel } from "@/components/operation-log-panel";
 import { cn } from "@/lib/utils";
 import type { Server, Project } from "@nexus/types";
 
@@ -36,15 +35,13 @@ export function NewApplicationPage() {
   const { toast } = useToast();
   const [step, setStep] = useState(0);
   const [creating, setCreating] = useState(false);
-  // Created application id — shows live progress while it deploys.
-  const [createdAppId, setCreatedAppId] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     name: "",
     description: "",
     projectId: "",
     serverId: "",
-    provider: "",
+    provider: "Github",
     repository: "",
     branch: "main",
     deploymentMethod: "DOCKERFILE" as "DOCKERFILE" | "COMPOSE",
@@ -133,9 +130,8 @@ export function NewApplicationPage() {
         /* deploy failure shows up on the detail page */
       }
       setCreating(false);
-      setCreatedAppId(res.application.id);
-      // Redirect to the detail page after a brief moment so the user sees the logs panel first.
-      setTimeout(() => navigate(`/applications/${res.application.id}`), 1800);
+      // Redirect to the detail page.
+      navigate(`/applications/${res.application.id}`);
     } catch (err) {
       toast("error", "Creation failed", err instanceof Error ? err.message : "Unknown error");
       setCreating(false);
@@ -420,7 +416,7 @@ export function NewApplicationPage() {
     <div className="p-4 sm:p-6">
       <PageHeader title="New Application" description="Deploy a service from a Git repository to any server." />
 
-      <div className={cn("grid items-start gap-6", createdAppId ? "lg:grid-cols-[minmax(0,1fr)_420px]" : "lg:grid-cols-[minmax(0,1fr)_400px]")}>
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
         <div>
           {/* Stepper */}
           <div className="mb-6 flex items-center gap-2">
@@ -462,21 +458,6 @@ export function NewApplicationPage() {
             </CardContent>
           </Card>
         </div>
-
-        {/* Right column — live deployment logs after creation */}
-        {createdAppId && (
-          <div className="lg:sticky lg:top-6">
-            <OperationLogPanel
-              resourceType="application"
-              resourceId={createdAppId}
-              title="Deployment Logs"
-              subtitle="Details of the request log entry."
-            />
-            <div className="mt-3">
-              <p className="text-[11px] text-muted-foreground">Redirecting to the application…</p>
-            </div>
-          </div>
-        )}
 
       </div>
     </div>

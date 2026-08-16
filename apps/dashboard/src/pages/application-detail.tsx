@@ -24,7 +24,6 @@ import { durationMs, timeAgo, shortId, formatBytes, formatTime } from "@/lib/for
 import { isServerLive, serverUnavailableReason } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { GitLogo } from "@/components/git-logos";
-import { OperationLogPanel } from "@/components/operation-log-panel";
 import type { ApplicationWithExtras, Backup, Deployment, DeploymentLogEntry, Domain, EnvironmentVariable } from "@nexus/types";
 
 type TabKey = "general" | "environment" | "domains" | "deployments" | "logs" | "backups" | "settings";
@@ -606,9 +605,6 @@ export function ApplicationDetailPage() {
   const containerName = `nexus-${app.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "app"}-${id.slice(-8)}`;
   const providerName: Provider = (app.provider as Provider | null | undefined) ?? detectProvider(provider?.repository ?? app.repository);
 
-  // Show the deployment logs panel when there's an active deploy (right side, like the Dokploy image).
-  const showDeployLogs = active && latestDeployment;
-
   return (
     <div className="p-4 sm:p-6">
       {!serverLive && (
@@ -622,7 +618,7 @@ export function ApplicationDetailPage() {
           </div>
         </div>
       )}
-      <div className={cn(showDeployLogs && "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]")}>
+      <div>
       <div>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1311,24 +1307,7 @@ export function ApplicationDetailPage() {
 
       </div> {/* end left column */}
 
-      {/* Right side — live deployment logs while a deploy is in progress */}
-      {showDeployLogs && latestDeployment && (
-        <div className="lg:sticky lg:top-6">
-          <OperationLogPanel
-            resourceType="application"
-            resourceId={latestDeployment.applicationId}
-            title="Deployment Logs"
-            subtitle="Details of the request log entry."
-          />
-          <div className="mt-3">
-            <p className="text-[11px] text-muted-foreground">
-              Status: <span className="font-medium text-foreground">{latestDeployment.status}</span>
-            </p>
-          </div>
-        </div>
-      )}
-
-      </div> {/* end grid */}
+      </div> {/* end wrapper */}
 
       {/* Deploy modal */}
       <Modal isOpen={deployOpen} onClose={() => setDeployOpen(false)} width="480px" maxWidth="480px">
