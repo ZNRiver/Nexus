@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network, Plus, Trash2, Loader2, Server as ServerIcon } from "lucide-react";
+import { Network, Plus, Trash2, Loader2, Server as ServerIcon, CloudOff } from "lucide-react";
 import { get, post, del } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -81,7 +81,7 @@ export function NetworksPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Networks"
         description="Docker networks across your online servers."
@@ -95,7 +95,7 @@ export function NetworksPage() {
               ]}
               onChange={(v) => setServerFilter(v)}
               placeholder="All servers"
-              className="w-56"
+              className="w-full sm:w-56"
             />
             <Button onClick={() => setCreateOpen(true)} disabled={!createServerId}>
               <Plus className="size-4" /> Create
@@ -106,6 +106,12 @@ export function NetworksPage() {
 
       {isLoading ? (
         <TableSkeleton rows={6} cols={4} />
+      ) : !networks.length && (servers?.items ?? []).length > 0 && (servers?.items ?? []).every((s) => s.status !== "ONLINE") ? (
+        <EmptyState
+          icon={<CloudOff className="size-5" />}
+          title="All servers offline"
+          description="Networks can't be listed while no server is reporting. Bring a server back online to see its networks here."
+        />
       ) : !networks.length ? (
         <EmptyState icon={<Network className="size-5" />} title="No networks" description="Create a network or deploy an application — isolated networks are created automatically." />
       ) : (
@@ -141,7 +147,7 @@ export function NetworksPage() {
       )}
 
       <Modal isOpen={createOpen} onClose={() => setCreateOpen(false)} maxWidth="440px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">Create network</h2>
           <div className="mt-5 space-y-4">
             <div className="space-y-1.5">

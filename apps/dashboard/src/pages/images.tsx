@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Image as ImageIcon, Download, Trash2, Loader2, Server as ServerIcon } from "lucide-react";
+import { Image as ImageIcon, Download, Trash2, Loader2, Server as ServerIcon, CloudOff } from "lucide-react";
 import { get, post, del } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ export function ImagesPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Images"
         description="Docker images available across your online servers — including built application images."
@@ -93,7 +93,7 @@ export function ImagesPage() {
               ]}
               onChange={(v) => setServerFilter(v)}
               placeholder="All servers"
-              className="w-56"
+              className="w-full sm:w-56"
             />
             <Button onClick={() => setPullOpen(true)} disabled={!pullServerId}>
               <Download className="size-4" /> Pull
@@ -104,6 +104,12 @@ export function ImagesPage() {
 
       {isLoading ? (
         <TableSkeleton rows={8} cols={4} />
+      ) : !images.length && (servers?.items ?? []).length > 0 && (servers?.items ?? []).every((s) => s.status !== "ONLINE") ? (
+        <EmptyState
+          icon={<CloudOff className="size-5" />}
+          title="All servers offline"
+          description="Images can't be listed while no server is reporting. Bring a server back online to see its images here."
+        />
       ) : !images.length ? (
         <EmptyState icon={<ImageIcon className="size-5" />} title="No images" description="Pull an image or deploy an application — built images land here." />
       ) : (
@@ -141,7 +147,7 @@ export function ImagesPage() {
       )}
 
       <Modal isOpen={pullOpen} onClose={() => setPullOpen(false)} maxWidth="440px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">Pull image</h2>
           <p className="mt-1 text-xs text-muted-foreground">Pulled on {servers?.items.find((s) => s.id === pullServerId)?.name ?? "selected server"}.</p>
           <div className="mt-5 space-y-1.5">

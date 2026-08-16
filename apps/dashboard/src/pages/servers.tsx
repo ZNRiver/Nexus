@@ -105,7 +105,7 @@ export function ServersPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Servers"
         description="Local and remote machines running the NEXUS Agent."
@@ -221,7 +221,7 @@ export function ServersPage() {
           </div>
         }
       >
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">Add Remote Server</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             NEXUS connects over SSH and runs the full setup: installs <span className="font-medium text-foreground/80">Docker Engine</span> (if missing), <span className="font-medium text-foreground/80">Bun</span> and the <span className="font-medium text-foreground/80">NEXUS Agent</span> as a systemd service.

@@ -59,8 +59,9 @@ export function Modal({
       <div
         className="relative w-full rounded-2xl shadow-2xl flex flex-col transition-all duration-300 !overflow-x-hidden border border-border/50 bg-card"
         style={{
-          width,
-          maxWidth,
+          // Cap pixel widths on small screens so fixed-size dialogs never overflow.
+          width: `min(${width}, calc(100vw - 2rem))`,
+          maxWidth: `min(${maxWidth}, calc(100vw - 2rem))`,
           maxHeight,
           height,
           opacity: isVisible ? 1 : 0,

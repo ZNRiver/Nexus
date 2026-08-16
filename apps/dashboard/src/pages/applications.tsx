@@ -4,7 +4,7 @@ import { Boxes, Plus } from "lucide-react";
 import { get } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { PageHeader } from "@/components/page-header";
 import { TableSkeleton } from "@/components/skeleton";
 import { EmptyState } from "@/components/empty-state";
@@ -15,7 +15,7 @@ export function ApplicationsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["applications"], queryFn: () => get<{ items: ApplicationWithExtras[] }>("/applications"), refetchInterval: 10000 });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Applications"
         description="Web apps, APIs and workers deployed via Dockerfile or Docker Compose."
@@ -61,7 +61,10 @@ export function ApplicationsPage() {
                   <p>{app.deploymentCount} deploys</p>
                   <p>{timeAgo(app.updatedAt)}</p>
                 </div>
-                <StatusBadge status={app.status} className="shrink-0" />
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <StatusBadge status={app.status} />
+                  <HostOfflineTag status={app.server?.status} />
+                </div>
               </Link>
             ))}
           </div>

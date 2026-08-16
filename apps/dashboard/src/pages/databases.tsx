@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CustomSelect } from "@/components/ui/custom-select";
 import { Modal } from "@/components/ui/Modal";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { PageHeader } from "@/components/page-header";
 import { TableSkeleton } from "@/components/skeleton";
 import { EmptyState } from "@/components/empty-state";
@@ -67,6 +67,7 @@ export function DatabasesPage({ mode }: { mode?: string }) {
 
   const typeInfo = DB_TYPES.find((t) => t.key === form.type)!;
   const serverOptions = (servers?.items ?? []).map((s) => ({ value: s.id, label: s.name, description: s.status }));
+  const hostStatus = (id: string) => servers?.items.find((s) => s.id === id)?.status;
   const versionOptions = typeInfo.versions.map((v) => ({ value: v, label: v }));
   const projectOptions = [{ value: "", label: "No project" }, ...(projects?.items ?? []).map((p) => ({ value: p.id, label: p.name }))];
   const close = () => {
@@ -115,7 +116,7 @@ export function DatabasesPage({ mode }: { mode?: string }) {
   const inputCls = "h-[42px] rounded-lg bg-muted/40 focus:border-ring/70 focus:ring-2 focus:ring-ring/15";
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Databases"
         description="Managed PostgreSQL, MySQL, MariaDB, Redis, MongoDB and InfluxDB running in containers."
@@ -157,7 +158,10 @@ export function DatabasesPage({ mode }: { mode?: string }) {
                         {db.image} · :{db.port} · {formatBytes(db.storageLimitBytes)} · {timeAgo(db.updatedAt)}
                       </p>
                     </div>
-                    <StatusBadge status={db.status} className="shrink-0" />
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <StatusBadge status={db.status} />
+                      <HostOfflineTag status={hostStatus(db.serverId)} />
+                    </div>
                   </Link>
                 ))}
               </div>
@@ -205,7 +209,7 @@ export function DatabasesPage({ mode }: { mode?: string }) {
           </div>
         }
       >
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {/* Header */}
           <div className="pr-10">
             <h2 className="text-lg font-semibold text-foreground">Databases</h2>

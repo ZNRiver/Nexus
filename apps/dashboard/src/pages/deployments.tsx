@@ -24,7 +24,7 @@ export function DeploymentsPage() {
   const appNames = useMemo(() => new Map((apps?.items ?? []).map((a) => [a.id, a.name])), [apps]);
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader title="Deployments" description="Every deploy queued across all applications and servers." />
 
       {isLoading ? (

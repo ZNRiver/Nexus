@@ -63,6 +63,8 @@ const NAV = [
       { key: "backups", href: "/backups", icon: Archive, label: "Backups" },
       { key: "jobs", href: "/jobs", icon: ScrollText, label: "Jobs" },
       { key: "audit", href: "/audit", icon: Bell, label: "Audit Log" },
+      { key: "notifications", href: "/notifications", icon: Bell, label: "Notifications" },
+      { key: "settings", href: "/settings", icon: Settings, label: "Settings" },
     ],
   },
 ];
@@ -72,12 +74,20 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  /** When true (mobile drawer) the sidebar always renders expanded. */
+  mobile?: boolean;
+  /** Called after navigation so a mobile drawer can close itself. */
+  onNavigate?: () => void;
+}
+
+export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, refetch } = useAuth();
   const { resolvedTheme, toggle } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
+  const isCollapsed = mobile ? false : collapsed;
 
   const handleLogout = async () => {
     try {
@@ -86,22 +96,23 @@ export function Sidebar() {
       /* ignore */
     }
     refetch();
+    onNavigate?.();
     navigate("/login");
   };
 
   return (
     <aside
-      className={`sticky top-0 flex h-screen shrink-0 flex-col border-r border-border/60 bg-card/40 backdrop-blur transition-all duration-300 ease-in-out ${
-        collapsed ? "w-[72px]" : "w-[248px]"
+      className={`sticky top-0 flex h-screen flex-col border-r border-border/60 bg-card/40 backdrop-blur transition-all duration-300 ease-in-out ${
+        isCollapsed ? "w-[72px]" : "w-full lg:w-[248px]"
       }`}
     >
       {/* Header */}
-      <div className={`flex items-center px-4 py-5 ${collapsed ? "flex-col gap-3" : "justify-between"}`}>
-        <Link to="/overview" className="flex items-center gap-2.5 min-w-0" title="NEXUS">
+      <div className={`flex items-center px-4 py-5 ${isCollapsed ? "flex-col gap-3" : "justify-between"}`}>
+        <Link to="/overview" onClick={onNavigate} className="flex min-w-0 items-center gap-2.5" title="NEXUS">
           <Logo size={26} className="shrink-0" />
-          {!collapsed && <span className="text-base font-semibold tracking-tight text-foreground">NEXUS</span>}
+          {!isCollapsed && <span className="text-base font-semibold tracking-tight text-foreground">NEXUS</span>}
         </Link>
-        <div className={`flex items-center ${collapsed ? "flex-col gap-1" : "gap-1"}`}>
+        <div className={`flex items-center ${isCollapsed ? "flex-col gap-1" : "gap-1"}`}>
           <button
             onClick={toggle}
             className="flex size-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
@@ -110,14 +121,16 @@ export function Sidebar() {
           >
             {resolvedTheme === "light" ? <Sun className="size-4" /> : resolvedTheme === "dim" ? <SunMoon className="size-4" /> : <Moon className="size-4" />}
           </button>
-          <button
-            type="button"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex size-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
-          >
-            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-          </button>
+          {!mobile && (
+            <button
+              type="button"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="flex size-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
+            >
+              {isCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            </button>
+          )}
         </div>
       </div>
       <div className="mx-3 h-px bg-border/60" />
@@ -126,10 +139,10 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-3 py-3">
         {NAV.map(({ section, items }, si) => (
           <div key={section ?? si} className={si > 0 ? "mt-5" : undefined}>
-            {!collapsed && section && (
+            {!isCollapsed && section && (
               <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/60">{section}</p>
             )}
-            {collapsed && si > 0 && <div className="mx-2 my-3 h-px bg-border/60" />}
+            {isCollapsed && si > 0 && <div className="mx-2 my-3 h-px bg-border/60" />}
             <div className="space-y-1">
               {items.map(({ key, href, icon: Icon, label }) => {
                 const active = isActive(pathname, href);
@@ -137,9 +150,10 @@ export function Sidebar() {
                   <Link
                     key={key}
                     to={href}
-                    title={collapsed ? label : undefined}
+                    onClick={onNavigate}
+                    title={isCollapsed ? label : undefined}
                     className={`flex items-center rounded-xl px-3 py-2.5 text-[14px] font-medium transition-all duration-150 ring-inset ${
-                      collapsed ? "justify-center" : "gap-3"
+                      isCollapsed ? "justify-center" : "gap-3"
                     } ${
                       active
                         ? "bg-primary/10 text-primary ring-1 ring-primary/20"
@@ -147,7 +161,7 @@ export function Sidebar() {
                     }`}
                   >
                     <Icon className="size-[17px] shrink-0" strokeWidth={1.7} />
-                    {!collapsed && <span className="flex-1 truncate">{label}</span>}
+                    {!isCollapsed && <span className="flex-1 truncate">{label}</span>}
                   </Link>
                 );
               })}
@@ -160,25 +174,26 @@ export function Sidebar() {
       <div className="px-3 pb-2">
         <Link
           to="/applications/new"
-          title={collapsed ? "New Application" : undefined}
+          onClick={onNavigate}
+          title={isCollapsed ? "New Application" : undefined}
           className="relative flex items-center justify-center gap-2.5 overflow-hidden rounded-xl border border-border/80 bg-foreground/[0.06] px-3 py-2.5 text-sm font-semibold text-foreground transition-colors hover:border-foreground/20 hover:bg-foreground/[0.1]"
         >
           <Plus className="size-4" strokeWidth={2.5} />
-          {!collapsed && <span>New Application</span>}
+          {!isCollapsed && <span>New Application</span>}
         </Link>
       </div>
 
       {/* Account */}
       <div className="px-3 pb-4 pt-1">
         <div className="mx-2 mb-3 h-px bg-border/60" />
-        {!collapsed && (
+        {!isCollapsed && (
           <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/60">Account</p>
         )}
-        <div className={`flex items-center rounded-xl px-2 py-2 ${collapsed ? "justify-center" : "gap-3"}`}>
+        <div className={`flex items-center rounded-xl px-2 py-2 ${isCollapsed ? "justify-center" : "gap-3"}`}>
           <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground/[0.08] text-xs font-semibold uppercase text-foreground">
             {user?.name?.[0] ?? user?.email?.[0] ?? "?"}
           </div>
-          {!collapsed && (
+          {!isCollapsed && (
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-medium leading-tight text-foreground">{user?.name}</p>
               <p className="truncate text-[11px] leading-tight text-muted-foreground">{user?.email}</p>

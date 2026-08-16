@@ -105,7 +105,7 @@ function AddDomainModal({
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <h2 className="text-sm font-semibold">Add domain</h2>
       <p className="mt-1 text-xs text-muted-foreground">
         Attach a hostname to an application or game server. Use a free wildcard provider or your own custom domain.
@@ -348,7 +348,7 @@ export function DomainsPage() {
   ];
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Domains"
         description="Hostnames attached to applications and game servers — use a free wildcard domain or your own."
@@ -426,7 +426,7 @@ export function DomainsPage() {
 
       {deleteTarget && (
         <Modal isOpen onClose={() => !deleting && setDeleteTarget(null)} maxWidth="440px" showCloseButton={!deleting}>
-          <div className="p-6">
+          <div className="p-4 sm:p-6">
             <h2 className="text-sm font-semibold">Remove domain</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {deleteTarget.domain.hostname} will no longer be attached to {(deleteTarget.app ?? deleteTarget.game)?.name}.

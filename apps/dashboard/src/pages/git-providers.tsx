@@ -53,7 +53,7 @@ export function GitProvidersPage() {
   });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <Card className="mx-auto max-w-3xl">
         <CardHeader className="p-6">
           <div className="flex items-start gap-3">
@@ -236,7 +236,7 @@ function ConnectModal({
 
   return (
     <Modal isOpen onClose={onClose} width="440px" maxWidth="92vw">
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <span
             className="flex size-10 items-center justify-center rounded-xl shadow-sm"

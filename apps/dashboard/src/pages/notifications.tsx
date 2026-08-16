@@ -27,7 +27,7 @@ export function NotificationsPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Notifications"
         description="Deployment results, server status changes and infrastructure events."

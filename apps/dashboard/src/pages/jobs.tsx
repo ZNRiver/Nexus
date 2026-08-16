@@ -17,7 +17,7 @@ export function JobsPage() {
   });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader title="Jobs" description="Background workers executing deployments, backups and infrastructure operations." />
 
       {isLoading ? (

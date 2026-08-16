@@ -14,7 +14,7 @@ export function AuditPage() {
 
   const { data, isLoading } = useQuery({ queryKey: ["audit"], queryFn: () => get<{ items: AuditLogEntry[] }>("/audit", { limit: "50" }), refetchInterval: 15000 });
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader title="Audit Log" description="Every administrative action recorded with actor, resource and server." />
 
       {isLoading ? (

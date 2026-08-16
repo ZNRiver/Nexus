@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  Bell, Search, ChevronRight, Server,
+  Bell, Search, ChevronRight, Server, Menu,
   Rocket, Database, Gamepad2, Archive, RotateCcw, CloudOff, Cloud, Wrench, AlertTriangle, Info,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -24,15 +24,15 @@ function Breadcrumbs() {
     crumbs.push({ label: decodeURIComponent(label), path: acc });
   }
   return (
-    <nav className="flex items-center gap-1 text-[13px] text-muted-foreground" aria-label="Breadcrumb">
+    <nav className="flex min-w-0 items-center gap-1 text-[13px] text-muted-foreground" aria-label="Breadcrumb">
       {crumbs.map((c, i) => {
         const isLast = i === crumbs.length - 1;
         const isCurrent = c.path === pathname;
         return (
-          <span key={`${c.path}-${i}`} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground/50" />}
+          <span key={`${c.path}-${i}`} className="flex min-w-0 items-center gap-1">
+            {i > 0 && <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/50" />}
             {isLast ? (
-              <span className="truncate font-medium text-foreground" aria-current="page">
+              <span className="max-w-[140px] truncate font-medium text-foreground sm:max-w-[280px] lg:max-w-none" aria-current="page">
                 {c.label}
               </span>
             ) : (
@@ -55,7 +55,7 @@ function Breadcrumbs() {
   );
 }
 
-export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
+export function Topbar({ onOpenPalette, onOpenSidebar }: { onOpenPalette: () => void; onOpenSidebar: () => void }) {
   const navigate = useNavigate();
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -102,23 +102,33 @@ export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
   };
 
   return (
-    <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-4 border-b border-border/60 bg-background/80 px-6 backdrop-blur">
-      <Breadcrumbs />
+    <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border/60 bg-background/80 px-4 backdrop-blur sm:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <button
+          onClick={onOpenSidebar}
+          className="flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground lg:hidden"
+          aria-label="Open navigation"
+        >
+          <Menu className="size-4.5" />
+        </button>
+        <Breadcrumbs />
+      </div>
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5">
         <button
           onClick={onOpenPalette}
-          className="flex h-9 items-center gap-2 rounded-xl border border-input bg-card px-3 text-[13px] text-muted-foreground transition-colors hover:border-ring/40 hover:text-foreground"
+          className="flex size-9 items-center justify-center gap-2 rounded-xl border border-input bg-card px-2 text-[13px] text-muted-foreground transition-colors hover:border-ring/40 hover:text-foreground sm:px-3"
+          aria-label="Search"
         >
           <Search className="size-3.5" />
-          <span className="hidden sm:inline">Search</span>
-          <kbd className="hidden rounded-md border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium sm:inline">⌘K</kbd>
+          <span className="hidden md:inline">Search</span>
+          <kbd className="hidden rounded-md border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium md:inline">⌘K</kbd>
         </button>
 
         {/* Server status */}
         <button
           onClick={() => navigate("/servers")}
-          className="flex h-9 items-center gap-2 rounded-xl border border-input bg-card px-3 text-[13px] text-muted-foreground transition-colors hover:border-ring/40 hover:text-foreground"
+          className="flex h-9 items-center gap-2 rounded-xl border border-input bg-card px-2.5 text-[13px] text-muted-foreground transition-colors hover:border-ring/40 hover:text-foreground sm:px-3"
           title={`${online}/${total} servers online`}
         >
           <Server className="size-3.5" />

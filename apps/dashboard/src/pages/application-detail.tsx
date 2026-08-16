@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Globe, Rocket, RefreshCw, Wrench, Play, Terminal, Eye, EyeOff, KeyRound, Trash2, Plus, Loader2,
-  RotateCcw, Square, Settings as SettingsIcon, CircleHelp, Check, DatabaseBackup, HardDrive, Download, CalendarClock, Save, Upload, UploadCloud, Sparkles,
+  RotateCcw, Square, Settings as SettingsIcon, CircleHelp, Check, DatabaseBackup, HardDrive, Download, CalendarClock, Save, Upload, UploadCloud, Sparkles, CloudOff,
 } from "lucide-react";
 import { get, post, put, del, patch, downloadBackup } from "@/lib/api";
 import { subscribeDashboard } from "@/lib/ws";
@@ -16,11 +16,12 @@ import { CustomSelect } from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/Switch";
 import { Modal } from "@/components/ui/Modal";
 import { Tabs, type TabDef } from "@/components/ui/Tabs";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Skeleton } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
 import { durationMs, timeAgo, shortId, formatBytes, formatTime } from "@/lib/format";
+import { isServerLive, serverUnavailableReason } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { GitLogo } from "@/components/git-logos";
 import { OperationLogPanel } from "@/components/operation-log-panel";
@@ -117,7 +118,7 @@ export function ApplicationDetailPage() {
         deployments: Deployment[];
         environment: EnvironmentVariable[];
         domains: Domain[];
-        server?: { id: string; name: string; host?: string | null } | null;
+        server?: { id: string; name: string; host?: string | null; status?: string | null; lastHeartbeatAt?: string | null } | null;
       }>(`/applications/${id}`),
     refetchInterval: 10000,
   });
@@ -132,7 +133,7 @@ export function ApplicationDetailPage() {
 
   // Live container logs: WS streaming with REST seed — no 5s polling.
   const { text: liveLogsText, live: liveLogsLive, resync: resyncLiveLogs } = useLiveLogs({
-    enabled: tab === "logs" && !!data?.application.currentContainerId,
+    enabled: tab === "logs" && !!data?.application.currentContainerId && isServerLive(data?.server ?? null),
     streamId: data?.application.currentContainerId ? `app:${id}` : null,
     kind: "application",
     id,
@@ -196,6 +197,7 @@ export function ApplicationDetailPage() {
 
   const app = data?.application;
   const server = data?.server;
+  const serverLive = isServerLive(server);
   const branchValue = branch || app?.branch || "main";
 
   // Initialize settings + provider forms once data is available.
@@ -593,7 +595,7 @@ export function ApplicationDetailPage() {
 
   if (isLoading || !data || !app) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="space-y-4 p-4 sm:p-6">
         <Skeleton className="h-8 w-72" />
         <Skeleton className="h-10" />
         <Skeleton className="h-40" />
@@ -608,14 +610,25 @@ export function ApplicationDetailPage() {
   const showDeployLogs = active && latestDeployment;
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
+      {!serverLive && (
+        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/10 px-4 py-3.5">
+          <CloudOff className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div>
+            <p className="text-sm font-semibold text-destructive">{serverUnavailableReason(server)}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Deploys, container actions and logs are unavailable until the host reconnects. Status shown may be stale.
+            </p>
+          </div>
+        </div>
+      )}
       <div className={cn(showDeployLogs && "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]")}>
       <div>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-[13px] font-medium text-muted-foreground">Application</p>
-          <div className="mt-1 flex items-center gap-3">
+          <div className="mt-1 flex flex-wrap items-center gap-3">
             <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight">
               <span className="flex size-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <Globe className="size-4" />
@@ -623,6 +636,7 @@ export function ApplicationDetailPage() {
               {app.name}
             </h1>
             <StatusBadge status={app.status} />
+            <HostOfflineTag status={server?.status} />
             {active && <StatusBadge status={latestDeployment?.status ?? ""} />}
           </div>
           <p className="mt-1 font-mono text-[13px] text-muted-foreground">{containerName}</p>
@@ -630,18 +644,18 @@ export function ApplicationDetailPage() {
             {app.deploymentMethod} · {providerName} · {app.branch} · {server?.name ?? app.serverId}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {app.currentContainerId && (
             <>
-              <Button variant="outline" size="sm" onClick={() => runAction("restart", "Reload")} disabled={actionBusy || app.status !== "RUNNING"}>
+              <Button variant="outline" size="sm" onClick={() => runAction("restart", "Reload")} disabled={actionBusy || app.status !== "RUNNING" || !serverLive}>
                 <RefreshCw className="size-4" /> Reload
               </Button>
-              <Button variant="outline" size="sm" onClick={() => runAction("stop", "Stop")} disabled={actionBusy || app.status !== "RUNNING"}>
+              <Button variant="outline" size="sm" onClick={() => runAction("stop", "Stop")} disabled={actionBusy || app.status !== "RUNNING" || !serverLive}>
                 <Square className="size-4" /> Stop
               </Button>
             </>
           )}
-          <Button size="sm" onClick={() => setDeployOpen(true)} disabled={app.status === "DEPLOYING" || active}>
+          <Button size="sm" onClick={() => setDeployOpen(true)} disabled={app.status === "DEPLOYING" || active || !serverLive}>
             <Rocket className="size-4" /> Deploy
           </Button>
         </div>
@@ -668,19 +682,19 @@ export function ApplicationDetailPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex flex-wrap gap-2">
-                  <Button onClick={() => setDeployOpen(true)} disabled={app.status === "DEPLOYING" || active}>
+                  <Button onClick={() => setDeployOpen(true)} disabled={app.status === "DEPLOYING" || active || !serverLive}>
                     <Rocket className="size-4" /> Deploy
                   </Button>
-                  <Button variant="outline" onClick={() => runAction("restart", "Reload")} disabled={actionBusy || !app.currentContainerId || app.status !== "RUNNING"}>
+                  <Button variant="outline" onClick={() => runAction("restart", "Reload")} disabled={actionBusy || !app.currentContainerId || app.status !== "RUNNING" || !serverLive}>
                     {actionBusy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} Reload
                   </Button>
-                  <Button variant="outline" onClick={() => runAction("rebuild", "Rebuild")} disabled={actionBusy || active}>
+                  <Button variant="outline" onClick={() => runAction("rebuild", "Rebuild")} disabled={actionBusy || active || !serverLive}>
                     <Wrench className="size-4" /> Rebuild
                   </Button>
-                  <Button variant="outline" onClick={() => runAction("start", "Start")} disabled={actionBusy || !app.currentContainerId || app.status === "RUNNING"}>
+                  <Button variant="outline" onClick={() => runAction("start", "Start")} disabled={actionBusy || !app.currentContainerId || app.status === "RUNNING" || !serverLive}>
                     <Play className="size-4" /> Start
                   </Button>
-                  <Button variant="outline" onClick={() => setExecOpen(true)} disabled={!app.currentContainerId || app.status !== "RUNNING"}>
+                  <Button variant="outline" onClick={() => setExecOpen(true)} disabled={!app.currentContainerId || app.status !== "RUNNING" || !serverLive}>
                     <Terminal className="size-4" /> Open Terminal
                   </Button>
                 </div>

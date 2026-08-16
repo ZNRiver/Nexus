@@ -121,7 +121,7 @@ export function BackupsPage() {
   const detailPath = (b: BackupRow) => (b.type === "VOLUME" ? `/applications/${b.resourceId}` : `/databases/${b.resourceId}`);
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Backups"
         description="Database snapshots and application volume snapshots created through the agent on each server."
@@ -209,7 +209,7 @@ export function BackupsPage() {
 
       {/* Upload modal */}
       <Modal isOpen={uploadOpen} onClose={() => setUploadOpen(false)} width="480px" maxWidth="480px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Upload className="size-4" /> Upload backup
           </h2>

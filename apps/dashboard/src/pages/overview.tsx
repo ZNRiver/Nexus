@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Boxes, Database, Gamepad2, Rocket, Server, Container, Activity, TrendingUp, XCircle, CircleAlert, ArrowUpRight } from "lucide-react";
@@ -10,6 +10,7 @@ import { Sparkline } from "@/components/sparkline";
 import { CardSkeleton } from "@/components/skeleton";
 import { PageHeader } from "@/components/page-header";
 import { timeAgo, formatPercent } from "@/lib/format";
+import { isServerLive } from "@/lib/status";
 import type { DashboardOverview } from "@nexus/types";
 
 function StatCard({ label, value, sub, icon: Icon, href }: { label: string; value: string | number; sub?: string; icon: React.ElementType; href?: string }) {
@@ -41,6 +42,12 @@ export function OverviewPage() {
     refetchInterval: 15000,
   });
 
+  // Live status per server (status + heartbeat) — the /overview payload carries
+  // status but not the heartbeat timestamp, so join the servers list to decide
+  // which rows are actually reporting right now.
+  const { data: servers } = useQuery({ queryKey: ["servers"], queryFn: () => get<{ items: { id: string; status?: string | null; lastHeartbeatAt?: string | null }[] }>("/servers"), refetchInterval: 15000 });
+  const serverById = useMemo(() => new Map((servers?.items ?? []).map((s) => [s.id, s])), [servers]);
+
   // Real-time updates — invalidate on WS events.
   useEffect(() => {
     const unsub = subscribeDashboard((event) => {
@@ -53,7 +60,7 @@ export function OverviewPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {Array.from({ length: 6 }).map((_, i) => (
             <CardSkeleton key={i} rows={2} />
@@ -65,7 +72,7 @@ export function OverviewPage() {
 
   if (isError || !data) {
     return (
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <Card>
           <CardContent className="flex flex-col items-center p-12 text-center">
             <CircleAlert className="size-8 text-destructive" />
@@ -77,8 +84,11 @@ export function OverviewPage() {
     );
   }
 
+  const onlineCount = data.serverHealth.filter((s) => isServerLive(serverById.get(s.serverId))).length;
+  const offlineCount = data.serverHealth.length - onlineCount;
+
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader title="Overview" description="Your infrastructure at a glance." />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
@@ -100,17 +110,35 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent className="space-y-2.5">
             {data.serverHealth.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No servers yet</p>}
-            {data.serverHealth.map((s) => (
-              <Link key={s.serverId} to={`/servers/${s.serverId}`} className="flex items-center justify-between rounded-xl px-3 py-2.5 transition-colors hover:bg-foreground/[0.06]">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{s.name}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    CPU {formatPercent(s.cpuPercent)} · Mem {formatPercent(s.memoryPercent)} · Disk {formatPercent(s.diskPercent)}
-                  </p>
-                </div>
-                <StatusBadge status={s.status} />
-              </Link>
-            ))}
+            {data.serverHealth.map((s) => {
+              const live = isServerLive(serverById.get(s.serverId));
+              return (
+                <Link
+                  key={s.serverId}
+                  to={`/servers/${s.serverId}`}
+                  className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-foreground/[0.06] ${live ? "" : "bg-destructive/[0.04]"}`}
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{s.name}</p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {live ? (
+                        <>
+                          CPU {formatPercent(s.cpuPercent)} · Mem {formatPercent(s.memoryPercent)} · Disk {formatPercent(s.diskPercent)}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground/70">CPU — · Mem — · Disk — · not reporting</span>
+                      )}
+                    </p>
+                  </div>
+                  <StatusBadge status={s.status} />
+                </Link>
+              );
+            })}
+            {data.serverHealth.length > 0 && offlineCount > 0 && (
+              <p className="pt-1 text-[11px] text-muted-foreground/70">
+                {onlineCount} online · {offlineCount} {offlineCount === 1 ? "server is" : "servers are"} not reporting metrics
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -125,11 +153,13 @@ export function OverviewPage() {
             {data.resourceUsage.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No online servers with metrics yet</p>}
             <div className="space-y-4">
               {data.resourceUsage.map((r) => (
-                <div key={r.serverId} className="flex items-center gap-4">
-                  <span className="w-28 shrink-0 truncate text-xs font-medium text-muted-foreground">{r.name}</span>
-                  <Sparkline data={r.metrics.map((m) => m.cpuPercent)} width={200} height={32} className="shrink-0" />
-                  <Sparkline data={r.metrics.map((m) => m.memoryPercent)} width={120} height={32} stroke="rgb(var(--success))" className="shrink-0" />
-                  <span className="ml-auto shrink-0 text-right text-[11px] tabular text-muted-foreground">
+                <div key={r.serverId} className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <span className="w-full shrink-0 truncate text-xs font-medium text-muted-foreground sm:w-28">{r.name}</span>
+                  <div className="flex min-w-0 flex-1 items-center gap-4">
+                    <Sparkline data={r.metrics.map((m) => m.cpuPercent)} height={32} className="w-1/2" />
+                    <Sparkline data={r.metrics.map((m) => m.memoryPercent)} height={32} stroke="rgb(var(--success))" className="w-1/2" />
+                  </div>
+                  <span className="shrink-0 text-right text-[11px] tabular text-muted-foreground">
                     <span className="text-foreground">CPU {formatPercent(r.metrics.at(-1)?.cpuPercent)}</span>
                     <br />
                     <span className="text-success">Mem {formatPercent(r.metrics.at(-1)?.memoryPercent)}</span>

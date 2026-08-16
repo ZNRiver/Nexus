@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Box, Play, Square, RotateCw, Pause, PlayCircle, Trash2, Terminal, Server as ServerIcon } from "lucide-react";
+import { Box, Play, Square, RotateCw, Pause, PlayCircle, Trash2, Terminal, Server as ServerIcon, CloudOff } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -86,7 +86,7 @@ export function ContainersPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Containers"
         description="Every container across your online servers."
@@ -99,13 +99,19 @@ export function ContainersPage() {
             ]}
             onChange={(v) => setServerFilter(v)}
             placeholder="All servers"
-            className="w-56"
+            className="w-full sm:w-56"
           />
         }
       />
 
       {isLoading ? (
         <TableSkeleton rows={8} cols={5} />
+      ) : !rows.length && (servers?.items ?? []).length > 0 && (servers?.items ?? []).every((s) => s.status !== "ONLINE") ? (
+        <EmptyState
+          icon={<CloudOff className="size-5" />}
+          title="All servers offline"
+          description="Containers can't be listed while no server is reporting. Bring a server back online to see its containers here."
+        />
       ) : !rows.length ? (
         <EmptyState icon={<Box className="size-5" />} title="No containers" description="Containers across your servers will appear here — deploy an application or create a database." />
       ) : (
@@ -161,7 +167,7 @@ export function ContainersPage() {
       />
 
       <Modal isOpen={!!actionTarget && actionTarget.action !== "remove"} onClose={() => setActionTarget(null)} maxWidth="400px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">
             {actionTarget?.action} {actionTarget?.container.name}
           </h2>
@@ -176,7 +182,7 @@ export function ContainersPage() {
       </Modal>
 
       <Modal isOpen={!!execTarget} onClose={() => setExecTarget(null)} maxWidth="640px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">Exec in {execTarget?.name}</h2>
           <p className="mt-1 text-xs text-muted-foreground">Running on {execTarget?.serverName}.</p>
           <div className="mt-4 flex gap-2">

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  KeyRound, Copy, Trash2, DatabaseBackup, Loader2, ExternalLink,
+  KeyRound, Copy, Trash2, DatabaseBackup, Loader2, ExternalLink, CloudOff,
   Rocket, RefreshCw, Play, Terminal, Eye, EyeOff, Activity, LayoutGrid, Layers, ScrollText, Settings2,
   HardDrive as HardDriveIcon, Cpu as CpuIcon, MemoryStick as MemoryIcon, CalendarClock, Save, Download, Upload, UploadCloud,
   SquareTerminal, Table2, PlayCircle, Clock3, Database as DatabaseIcon, FolderTree, ChevronRight, ChevronDown,
@@ -15,11 +15,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, type TabDef } from "@/components/ui/Tabs";
 import { Modal } from "@/components/ui/Modal";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Skeleton } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
 import { formatBytes, formatTime, timeAgo } from "@/lib/format";
+import { isServerLive, serverUnavailableReason } from "@/lib/status";
 import { DbLogo, DB_COLORS } from "@/components/db-logos";
 import { OperationLogPanel } from "@/components/operation-log-panel";
 import { useLiveLogs } from "@/lib/use-live-logs";
@@ -75,7 +76,7 @@ export function DatabaseDetailPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["database-detail", id],
     queryFn: () =>
-      get<{ database: Database; connection: DatabaseConnectionInfo | null; credentials: { id: string; username: string; passwordMasked: string }[]; backups: Backup[]; server?: { id: string; name: string } | null }>(
+      get<{ database: Database; connection: DatabaseConnectionInfo | null; credentials: { id: string; username: string; passwordMasked: string }[]; backups: Backup[]; server?: { id: string; name: string; status?: string | null; lastHeartbeatAt?: string | null } | null }>(
         `/databases/${id}`,
       ),
     refetchInterval: 8000,
@@ -277,7 +278,7 @@ export function DatabaseDetailPage() {
 
   if (isLoading || !data) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="space-y-4 p-4 sm:p-6">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-10" />
         <Skeleton className="h-40" />
@@ -290,36 +291,50 @@ export function DatabaseDetailPage() {
   const passwordShown = !!(revealed && revealedFields.has("password"));
   const rootPasswordShown = !!(revealed && revealedFields.has("rootPassword"));
   const uriShown = !!(revealed && revealedFields.has("uri"));
-  const canRun = db.status === "RUNNING";
+  // The database status is only trustworthy while its host is connected.
+  const serverLive = isServerLive(data.server);
+  const canRun = db.status === "RUNNING" && serverLive;
   const busy = actionBusy !== null;
 
   const passwordDisplay = passwordShown ? revealed!.password : connection?.password ?? "••••••••";
   const rootPasswordDisplay = rootPasswordShown ? revealed!.password : connection?.password ?? "••••••••";
   const uriDisplay = uriShown ? revealed!.uri : connection?.uri ?? "••••••••••••••••••••";
 
-  const stats = statsQ.data;
-  const statsError = statsQ.error ? (statsQ.error as Error).message : null;
+  const stats = serverLive ? statsQ.data : undefined;
+  const statsError = !serverLive ? serverUnavailableReason(data.server) : statsQ.error ? (statsQ.error as Error).message : null;
 
   const isProvisioning = db.status === "CREATING" || busy;
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
+      {!serverLive && (
+        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/10 px-4 py-3.5">
+          <CloudOff className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div>
+            <p className="text-sm font-semibold text-destructive">{serverUnavailableReason(data.server)}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              The status shown may be stale — console, stats and lifecycle actions are unavailable until the host reconnects.
+            </p>
+          </div>
+        </div>
+      )}
       <div className={cn(isProvisioning && "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]")}>
       <div>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-[13px] font-medium text-muted-foreground">Database</p>
-          <div className="mt-1 flex items-center gap-3">
+          <div className="mt-1 flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">{db.name}</h1>
             <StatusBadge status={db.status} />
+            <HostOfflineTag status={data.server?.status} />
           </div>
           <p className="mt-1 font-mono text-[13px] text-muted-foreground">{containerName}</p>
           <p className="mt-1 text-xs text-muted-foreground">
             {db.type} {db.version?.split(":")[1] ?? db.version} · {db.image} · {data.server?.name ?? db.serverId}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={backup} disabled={backingUp || !canRun}>
             {backingUp ? <Loader2 className="size-4 animate-spin" /> : <DatabaseBackup className="size-4" />} Backup
           </Button>
@@ -495,7 +510,7 @@ export function DatabaseDetailPage() {
         {tab === "monitoring" && (
           <div className="space-y-6">
             {statsError ? (
-              <Card>
+              <Card className={cn(!serverLive && "border-destructive/25 bg-destructive/10")}>
                 <CardContent className="py-8 text-center text-sm text-muted-foreground">{statsError}</CardContent>
               </Card>
             ) : (
@@ -514,9 +529,9 @@ export function DatabaseDetailPage() {
                 <CardTitle className="text-sm">Resource Limits</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-4 sm:grid-cols-3">
-                <MetricCard icon={HardDriveIcon} label="Storage" value={formatBytes(db.storageLimitBytes)} />
+                <MetricCard icon={HardDriveIcon} label="Storage" value={db.storageLimitBytes != null ? formatBytes(db.storageLimitBytes) : "—"} />
                 <MetricCard icon={CpuIcon} label="CPU limit" value={db.cpuLimit ? `${db.cpuLimit} cores` : "—"} />
-                <MetricCard icon={MemoryIcon} label="Memory limit" value={formatBytes(db.memoryLimitBytes)} />
+                <MetricCard icon={MemoryIcon} label="Memory limit" value={db.memoryLimitBytes != null ? formatBytes(db.memoryLimitBytes) : "—"} />
               </CardContent>
             </Card>
           </div>

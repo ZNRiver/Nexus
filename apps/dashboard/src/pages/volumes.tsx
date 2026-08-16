@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Plus, Trash2, Loader2, Server as ServerIcon } from "lucide-react";
+import { HardDrive, Plus, Trash2, Loader2, Server as ServerIcon, CloudOff } from "lucide-react";
 import { get, post, del } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ export function VolumesPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Volumes"
         description="Persistent storage across your online servers — including application and database volumes."
@@ -93,7 +93,7 @@ export function VolumesPage() {
               ]}
               onChange={(v) => setServerFilter(v)}
               placeholder="All servers"
-              className="w-56"
+              className="w-full sm:w-56"
             />
             <Button onClick={() => setCreateOpen(true)} disabled={!createServerId}>
               <Plus className="size-4" /> Create
@@ -104,6 +104,12 @@ export function VolumesPage() {
 
       {isLoading ? (
         <TableSkeleton rows={6} cols={4} />
+      ) : !volumes.length && (servers?.items ?? []).length > 0 && (servers?.items ?? []).every((s) => s.status !== "ONLINE") ? (
+        <EmptyState
+          icon={<CloudOff className="size-5" />}
+          title="All servers offline"
+          description="Volumes can't be listed while no server is reporting. Bring a server back online to see its volumes here."
+        />
       ) : !volumes.length ? (
         <EmptyState icon={<HardDrive className="size-5" />} title="No volumes" description="Create a volume or deploy an application with persistent storage." />
       ) : (
@@ -139,7 +145,7 @@ export function VolumesPage() {
       )}
 
       <Modal isOpen={createOpen} onClose={() => setCreateOpen(false)} maxWidth="440px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">Create volume</h2>
           <p className="mt-1 text-xs text-muted-foreground">Created on {servers?.items.find((s) => s.id === createServerId)?.name ?? "selected server"}.</p>
           <div className="mt-5 space-y-1.5">

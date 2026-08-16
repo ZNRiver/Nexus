@@ -57,7 +57,7 @@ export function ProjectsPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Projects"
         description="Group applications, databases and game servers into logical workspaces."
@@ -108,7 +108,7 @@ export function ProjectsPage() {
       )}
 
       <Modal isOpen={open} onClose={() => setOpen(false)} maxWidth="480px">
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">New Project</h2>
           <p className="mt-1 text-xs text-muted-foreground">Projects group resources that belong to the same product or environment.</p>
           <div className="mt-5 space-y-4">

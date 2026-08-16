@@ -69,7 +69,7 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="max-w-3xl p-6">
+    <div className="max-w-3xl p-4 sm:p-6">
       <PageHeader title="Settings" description="Instance-wide configuration for NEXUS." />
 
       <div className="space-y-6">
@@ -93,7 +93,7 @@ export function SettingsPage() {
               <Database className="size-4 text-muted-foreground" /> Retention
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-4">
+          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Keep last deployments</Label>
               <Input type="number" value={form.retention.deployments} onChange={(e) => set("retention", { ...form.retention, deployments: parseInt(e.target.value, 10) || 0 })} />
@@ -133,7 +133,7 @@ export function SettingsPage() {
               <ShieldCheck className="size-4 text-muted-foreground" /> Security
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid grid-cols-3 gap-4">
+          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
               <Label>Session TTL (hours)</Label>
               <Input type="number" value={form.security.sessionTtlHours} onChange={(e) => set("security", { ...form.security, sessionTtlHours: parseInt(e.target.value, 10) || 24 })} />
@@ -155,7 +155,7 @@ export function SettingsPage() {
               <KeyRound className="size-4 text-muted-foreground" /> Container registry
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-4">
+          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Registry</Label>
               <Input value={form.registry?.registry ?? ""} onChange={(e) => set("registry", { ...form.registry, registry: e.target.value })} placeholder="ghcr.io" />
@@ -203,7 +203,7 @@ export function SettingsPage() {
               <Switch checked={form.notifications?.emailEnabled ?? false} onChange={(v) => setNotif("emailEnabled", v)} ariaLabel="Email notifications" />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>SMTP host</Label>
                 <Input value={form.notifications?.smtpHost ?? ""} onChange={(e) => setNotif("smtpHost", e.target.value)} placeholder="smtp.gmail.com" />

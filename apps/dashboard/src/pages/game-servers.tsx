@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CustomSelect } from "@/components/ui/custom-select";
 import { Modal } from "@/components/ui/Modal";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { PageHeader } from "@/components/page-header";
 import { TableSkeleton } from "@/components/skeleton";
 import { EmptyState } from "@/components/empty-state";
@@ -49,6 +49,7 @@ export function GameServersPage({ mode }: { mode?: string }) {
 
   const { data: servers } = useQuery({ queryKey: ["servers"], queryFn: () => get<{ items: Server[] }>("/servers") });
   const { data: games, isLoading } = useQuery({ queryKey: ["game-servers"], queryFn: () => get<{ items: GameServer[] }>("/game-servers"), refetchInterval: 10000 });
+  const hostStatus = (id: string) => servers?.items.find((s) => s.id === id)?.status;
 
   const close = () => {
     setOpen(false);
@@ -93,7 +94,7 @@ export function GameServersPage({ mode }: { mode?: string }) {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Game Servers"
         description="Minecraft servers running in containers with persistent storage."
@@ -118,19 +119,22 @@ export function GameServersPage({ mode }: { mode?: string }) {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {games.items.map((g) => (
             <Card key={g.id} className="group p-5 transition-colors hover:border-border card-hover">
-              <Link to={`/game-servers/${g.id}`} className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <Link to={`/game-servers/${g.id}`} className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                     <Gamepad2 className="size-4" />
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold">{g.name}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{g.name}</p>
+                    <p className="truncate text-[11px] text-muted-foreground">
                       {g.flavor} {g.version} · :{g.port}
                     </p>
                   </div>
                 </div>
-                <StatusBadge status={g.status} />
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <StatusBadge status={g.status} />
+                  <HostOfflineTag status={hostStatus(g.serverId)} />
+                </div>
               </Link>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-xl bg-muted/50 py-2">
@@ -148,7 +152,7 @@ export function GameServersPage({ mode }: { mode?: string }) {
               </div>
               <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground">
                 <span>{timeAgo(g.updatedAt)}</span>
-                <Button size="sm" variant="outline" onClick={() => toggle(g)} disabled={working === g.id || ["CREATING", "REMOVING", "STARTING"].includes(g.status)}>
+                <Button size="sm" variant="outline" onClick={() => toggle(g)} disabled={working === g.id || ["CREATING", "REMOVING", "STARTING"].includes(g.status) || hostStatus(g.serverId) !== "ONLINE"}>
                   {working === g.id ? <Loader2 className="size-3.5 animate-spin" /> : g.status === "RUNNING" ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
                   {g.status === "RUNNING" ? "Stop" : "Start"}
                 </Button>
@@ -173,7 +177,7 @@ export function GameServersPage({ mode }: { mode?: string }) {
           </div>
         }
       >
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <h2 className="text-sm font-semibold">New Game Server</h2>
           <p className="mt-1 text-xs text-muted-foreground">Minecraft · containers on the chosen server.</p>
 

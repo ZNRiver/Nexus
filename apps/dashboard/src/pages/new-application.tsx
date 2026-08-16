@@ -417,7 +417,7 @@ export function NewApplicationPage() {
   ];
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader title="New Application" description="Deploy a service from a Git repository to any server." />
 
       <div className={cn("grid items-start gap-6", createdAppId ? "lg:grid-cols-[minmax(0,1fr)_420px]" : "lg:grid-cols-[minmax(0,1fr)_400px]")}>

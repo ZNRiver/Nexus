@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Terminal, Play, Square, RotateCw, ExternalLink, Globe, FolderTree,
+  Terminal, Play, Square, RotateCw, ExternalLink, Globe, FolderTree, CloudOff,
   CalendarClock, Users, Archive, Network as NetworkIcon, Rocket, Settings as SettingsIcon,
   Activity as ActivityIcon, Loader2, Trash2, Radio, Timer, Cpu, MemoryStick, HardDrive,
   ArrowDownToLine, ArrowUpFromLine, FolderPlus, FilePlus, Upload, FileText, MoreHorizontal,
@@ -13,7 +13,7 @@ import { get, post, patch, put, del, downloadBackup, downloadGameArchive } from 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, type TabDef } from "@/components/ui/Tabs";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, HostOfflineTag } from "@/components/status-badge";
 import { Sparkline } from "@/components/sparkline";
 import { Skeleton } from "@/components/skeleton";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/Switch";
 import { useToast } from "@/components/toast";
 import { formatBytes, timeAgo } from "@/lib/format";
+import { isServerLive, serverUnavailableReason } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { useLiveLogs } from "@/lib/use-live-logs";
 import { subscribeDashboard } from "@/lib/ws";
@@ -161,7 +162,7 @@ export function GameServerDetailPage() {
   // Live console: seed from REST, then stream lines over the dashboard WS.
   // No 5s polling while the stream is alive.
   const { text: liveText, live, resync: resyncLogs, append: appendLog, clear: clearLogs } = useLiveLogs({
-    enabled: tab === "console" && !!game?.containerId,
+    enabled: tab === "console" && !!game?.containerId && isServerLive(data?.server ?? null),
     streamId: game?.containerId ? `game:${id}` : null,
     kind: "game",
     id,
@@ -257,16 +258,20 @@ export function GameServerDetailPage() {
   };
 
   const address = server ? `${server.host}:${game?.port ?? "25565"}` : "—";
+  const serverLive = isServerLive(server);
   const uptimeStart = game?.status === "RUNNING" ? game.updatedAt : null;
-  const memLimit = stats?.memoryLimitBytes ?? game?.memoryBytes ?? 0;
-  const memUsed = stats?.memoryUsageBytes ?? 0;
+  // Live stats are only current while the host is connected AND the game is
+  // actually running — a cached value from before a disconnect is not current.
+  const liveStats = serverLive && game?.status === "RUNNING" ? stats : undefined;
+  const memLimit = liveStats?.memoryLimitBytes ?? game?.memoryBytes ?? 0;
+  const memUsed = liveStats?.memoryUsageBytes ?? 0;
   const diskLimit = game?.storageBytes ?? 0;
   const diskUsed = system?.diskUsedBytes ?? null;
   const diskTotal = system?.diskTotalBytes ?? diskLimit;
 
   if (isLoading || !data || !game) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="space-y-4 p-4 sm:p-6">
         <Skeleton className="h-8 w-72" />
         <Skeleton className="h-10" />
         <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
@@ -277,10 +282,22 @@ export function GameServerDetailPage() {
     );
   }
 
-  const running = game.status === "RUNNING";
+  // Never claim the game is running while its host is disconnected.
+  const running = game.status === "RUNNING" && serverLive;
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
+      {!serverLive && (
+        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/10 px-4 py-3.5">
+          <CloudOff className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div>
+            <p className="text-sm font-semibold text-destructive">{serverUnavailableReason(server)}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              The console, stats and live actions are unavailable until the host reconnects. Status shown may be stale.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Tabs bar */}
       <div className="flex items-center justify-between gap-3">
         <Tabs tabs={TABS} value={tab} onChange={setTab} className="flex-1" />
@@ -302,23 +319,24 @@ export function GameServerDetailPage() {
             <GamepadIcon />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <h1 className="truncate text-2xl font-semibold tracking-tight">{game.name}</h1>
               <StatusBadge status={game.status} />
+              <HostOfflineTag status={server?.status} />
             </div>
             <p className="mt-0.5 text-[13px] text-muted-foreground">
               {game.flavor ?? "Minecraft"} {game.version} · {server?.name ?? game.serverId} · updated {timeAgo(game.updatedAt)}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={() => runAction("start")} disabled={actionBusy || running || !game.containerId}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => runAction("start")} disabled={actionBusy || running || !game.containerId || !serverLive}>
             {actionBusy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Start
           </Button>
-          <Button variant="outline" onClick={() => runAction("restart")} disabled={actionBusy || !running}>
+          <Button variant="outline" onClick={() => runAction("restart")} disabled={actionBusy || !running || !serverLive}>
             <RotateCw className="size-4" /> Restart
           </Button>
-          <Button variant="destructive" onClick={() => runAction("stop")} disabled={actionBusy || !running}>
+          <Button variant="destructive" onClick={() => runAction("stop")} disabled={actionBusy || !running || !serverLive}>
             <Square className="size-4" /> Stop
           </Button>
         </div>
@@ -383,17 +401,6 @@ export function GameServerDetailPage() {
                     <CardTitle className="text-[13px] font-medium">Server Status</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="flex gap-2">
-                      <Button size="sm" className="flex-1" onClick={() => runAction("start")} disabled={actionBusy || running || !game.containerId}>
-                        {actionBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />} Start
-                      </Button>
-                      <Button size="sm" variant="outline" className="flex-1" onClick={() => runAction("restart")} disabled={actionBusy || !running}>
-                        <RotateCw className="size-3.5" /> Restart
-                      </Button>
-                      <Button size="sm" variant="destructive" className="flex-1" onClick={() => runAction("stop")} disabled={actionBusy || !running}>
-                        <Square className="size-3.5" /> Stop
-                      </Button>
-                    </div>
                     <Button size="sm" variant="outline" className="w-full" onClick={() => setDeleteOpen(true)}>
                       <Trash2 className="size-3.5" /> Delete server
                     </Button>
@@ -401,31 +408,31 @@ export function GameServerDetailPage() {
                 </Card>
 
                 <MetricCard icon={<Radio className="size-3.5" />} label="Address" value={address} mono />
-                <MetricCard icon={<Timer className="size-3.5" />} label="Uptime" value={running ? fmtUptime(uptimeStart) : "—"} />
+                <MetricCard icon={<Timer className="size-3.5" />} label="Uptime" value={running ? fmtUptime(uptimeStart) : serverLive ? "—" : "Unavailable"} />
                 <MetricCard
                   icon={<Cpu className="size-3.5" />}
                   label="CPU Load"
-                  value={`${stats?.cpuPercent?.toFixed(2) ?? "0.00"}% / ${game.cpuLimit ? `${game.cpuLimit} cores` : "∞"}`}
+                  value={liveStats ? `${liveStats.cpuPercent.toFixed(2)}% / ${game.cpuLimit ? `${game.cpuLimit} cores` : "∞"}` : "—"}
                 />
                 <MetricCard
                   icon={<MemoryStick className="size-3.5" />}
                   label="Memory"
-                  value={`${formatBytes(memUsed || null)} / ${formatBytes(memLimit || null)}`}
+                  value={liveStats ? `${formatBytes(memUsed)} / ${formatBytes(memLimit)}` : "—"}
                 />
                 <MetricCard
                   icon={<HardDrive className="size-3.5" />}
                   label="Disk"
-                  value={`${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`}
+                  value={liveStats && diskUsed != null && diskTotal != null ? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}` : "—"}
                 />
                 <MetricCard
                   icon={<ArrowDownToLine className="size-3.5" />}
                   label="Network (Inbound)"
-                  value={stats?.networkRxBytes ? formatBytes(stats.networkRxBytes) : "0 B"}
+                  value={liveStats && liveStats.networkRxBytes ? formatBytes(liveStats.networkRxBytes) : "—"}
                 />
                 <MetricCard
                   icon={<ArrowUpFromLine className="size-3.5" />}
                   label="Network (Outbound)"
-                  value={stats?.networkTxBytes ? formatBytes(stats.networkTxBytes) : "0 B"}
+                  value={liveStats && liveStats.networkTxBytes ? formatBytes(liveStats.networkTxBytes) : "—"}
                 />
               </div>
             </div>
@@ -435,28 +442,28 @@ export function GameServerDetailPage() {
               <ChartCard
                 title="CPU Load"
                 unit="%"
-                value={stats ? `${stats.cpuPercent.toFixed(2)}%` : "—"}
+                value={liveStats ? `${liveStats.cpuPercent.toFixed(2)}%` : "—"}
                 lowLabel="0%"
                 highLabel={`${game.cpuLimit ? game.cpuLimit * 100 : 100}%`}
-                data={cpuHist}
+                data={serverLive ? cpuHist : []}
                 stroke="rgb(var(--primary))"
               />
               <ChartCard
                 title="Memory"
                 unit="MiB"
-                value={stats ? `${Math.round(memUsed / 1024 / 1024)}MiB` : "—"}
+                value={liveStats ? `${Math.round(memUsed / 1024 / 1024)}MiB` : "—"}
                 lowLabel="0MiB"
                 highLabel={`${Math.round(memLimit / 1024 / 1024)}MiB`}
-                data={memHist}
+                data={serverLive ? memHist : []}
                 stroke="rgb(56 189 248)"
               />
               <ChartCard
                 title="Network"
                 unit="Bytes"
-                value={stats ? formatBytes((stats.networkRxBytes ?? 0) + (stats.networkTxBytes ?? 0)) : "—"}
+                value={liveStats ? formatBytes((liveStats.networkRxBytes ?? 0) + (liveStats.networkTxBytes ?? 0)) : "—"}
                 lowLabel="0B"
                 highLabel="peak"
-                data={rxHist.map((v, i) => v + (txHist[i] ?? 0))}
+                data={serverLive ? rxHist.map((v, i) => v + (txHist[i] ?? 0)) : []}
                 stroke="rgb(74 222 128)"
               />
             </div>
@@ -538,7 +545,7 @@ function ChartCard({
         </CardTitle>
       </CardHeader>
       <CardContent className="pb-3">
-        <Sparkline data={data.length >= 2 ? data : [0, 0]} width={300} height={72} stroke={stroke} className="w-full" />
+        <Sparkline data={data.length >= 2 ? data : [0, 0]} height={72} stroke={stroke} className="w-full" />
         <div className="mt-2 flex justify-between text-[10px] text-muted-foreground/70">
           <span>{lowLabel}</span>
           <span>{highLabel}</span>
