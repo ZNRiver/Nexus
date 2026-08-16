@@ -434,9 +434,15 @@ export function registerMiscRoutes(app: App, ctx: AppContext): void {
     const parsed = z.object({
       image: z.string().optional(),
       environment: z.record(z.string()).optional(),
+      rawText: z.string().optional(),
     }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
     const result = await games.updateStartup(pid(c), parsed.data);
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/api/v1/game-servers/:id/environment/:key/reveal", requireAuth, requireGamePerm(), async (c) => {
+    const result = await games.revealEnvValue(pid(c), pid(c, "key"));
     return c.json({ success: true, ...result });
   });
 

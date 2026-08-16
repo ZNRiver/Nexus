@@ -6,7 +6,7 @@ import {
   CalendarClock, Users, Archive, Network as NetworkIcon, Rocket, Settings as SettingsIcon,
   Activity as ActivityIcon, Loader2, Trash2, Radio, Timer, Cpu, MemoryStick, HardDrive,
   ArrowDownToLine, ArrowUpFromLine, FolderPlus, FilePlus, Upload, FileText, MoreHorizontal,
-  Download, Lock, Unlock, Pencil, Save, ChevronRight, Plus, X, RefreshCw, PlayCircle, Folder, File,
+  Download, Lock, Unlock, Pencil, Save, ChevronRight, Plus, RefreshCw, PlayCircle, Folder, File,
   Star, TerminalSquare, Check, Copy,
 } from "lucide-react";
 import { get, post, patch, put, del, downloadBackup, downloadGameArchive } from "@/lib/api";
@@ -22,12 +22,13 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/Switch";
 import { useToast } from "@/components/toast";
+import { EnvTextEditor } from "@/components/env-text-editor";
 import { formatBytes, timeAgo } from "@/lib/format";
 import { isServerLive, serverUnavailableReason } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { useLiveLogs } from "@/lib/use-live-logs";
 import { subscribeDashboard } from "@/lib/ws";
-import type { GameServer, GameServerStatus, Server, SystemMetrics } from "@nexus/types";
+import type { EnvironmentVariable, GameServer, GameServerStatus, Server, SystemMetrics } from "@nexus/types";
 
 type TabKey = "console" | "files" | "schedules" | "users" | "backups" | "network" | "startup" | "settings" | "activity";
 
@@ -2059,17 +2060,14 @@ function NetworkTab({ game }: { game: GameServer }) {
 function StartupTab({ game }: { game: GameServer }) {
   const { toast } = useToast();
   const id = game.id;
-  const [startup, setStartup] = useState<{ image: string; images: string[]; environment: Record<string, string>; command: string } | null>(null);
+  const [startup, setStartup] = useState<{ image: string; images: string[]; environment: Record<string, string>; environmentText: string | null; command: string } | null>(null);
   const [image, setImage] = useState("");
-  const [env, setEnv] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
 
   const load = async () => {
     try {
-      const res = await get<{ image: string; images: string[]; environment: Record<string, string>; command: string }>(`/game-servers/${id}/startup`);
+      const res = await get<{ image: string; images: string[]; environment: Record<string, string>; environmentText: string | null; command: string }>(`/game-servers/${id}/startup`);
       setStartup(res);
       setImage(res.image);
-      setEnv({ ...res.environment });
     } catch (e) {
       toast("error", "Failed to load startup", e instanceof Error ? e.message : "Unknown error");
     }
@@ -2080,35 +2078,11 @@ function StartupTab({ game }: { game: GameServer }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      const res = await put<{ gameServer: GameServer; applied: boolean }>(`/game-servers/${id}/startup`, { image, environment: env });
-      toast(
-        "success",
-        "Startup saved",
-        res.applied ? "The container was recreated with the new settings." : "Settings saved — the container will apply them on next deploy.",
-      );
-      void load();
-    } catch (e) {
-      toast("error", "Save failed", e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const setVar = (k: string, v: string) => setEnv((e) => ({ ...e, [k]: v }));
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold">Startup</h2>
-          <p className="text-[13px] text-muted-foreground">Configure how the server container starts — image, memory, versions.</p>
-        </div>
-        <Button onClick={() => void save()} disabled={saving || !startup}>
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />} Save &amp; reinstall
-        </Button>
+      <div>
+        <h2 className="text-sm font-semibold">Startup</h2>
+        <p className="text-[13px] text-muted-foreground">Configure how the server container starts — image, memory, versions. Saving the .env below recreates the container.</p>
       </div>
 
       <Card>
@@ -2143,43 +2117,32 @@ function StartupTab({ game }: { game: GameServer }) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-[13px] font-medium">Variables</CardTitle>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setVar(`VAR_${Object.keys(env).length + 1}`, "")}
-          >
-            <Plus className="size-3.5" /> Add variable
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-2.5">
-          {Object.entries(env).map(([k, v]) => (
-            <div key={k} className="flex items-center gap-2">
-              <span className="w-40 shrink-0 truncate font-mono text-[12px] text-muted-foreground" title={k}>{k}</span>
-              <Input
-                value={v}
-                onChange={(e) => setVar(k, e.target.value)}
-                spellCheck={false}
-                className="h-9 font-mono text-[12.5px]"
-              />
-              <button
-                onClick={() => setEnv((e) => {
-                  const next = { ...e };
-                  delete next[k];
-                  return next;
-                })}
-                className="rounded-lg p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive"
-                title="Remove variable"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-          ))}
-          {Object.keys(env).length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No variables.</p>}
-        </CardContent>
-      </Card>
+      <EnvTextEditor
+        items={Object.entries(startup?.environment ?? {}).map(([k, v]) => ({
+          id: k,
+          key: k,
+          valueMasked: k === "RCON_PASSWORD" ? "••••••••" : v,
+          isSecret: k === "RCON_PASSWORD",
+          updatedAt: "",
+          applicationId: null,
+          databaseId: null,
+          gameServerId: id,
+        }))}
+        environmentText={startup?.environmentText}
+        resourceId={id}
+        saveUrl={() => `/game-servers/${id}/startup`}
+        revealUrl={(gid, key) => `/game-servers/${gid}/environment/${encodeURIComponent(key)}/reveal`}
+        saveLabel="Save & reinstall"
+        onSave={async (_variables, rawText) => {
+          const res = await put<{ gameServer: GameServer; applied: boolean }>(`/game-servers/${id}/startup`, { image, rawText });
+          toast(
+            "success",
+            "Startup saved",
+            res.applied ? "The container was recreated with the new settings." : "Settings saved — the container will apply them on next deploy.",
+          );
+          void load();
+        }}
+      />
     </div>
   );
 }

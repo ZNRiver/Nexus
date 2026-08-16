@@ -424,6 +424,8 @@ export interface GameServer {
   cpuLimit?: number | null;
   storageBytes: number;
   environment: Record<string, string>;
+  /** Raw .env editor text (comments + ordering). Secret values are masked with dots. */
+  environmentText?: string | null;
   status: GameServerStatus;
   containerId?: string | null;
   volumeName?: string | null;

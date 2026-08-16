@@ -1,5 +1,6 @@
 import type { BackupRow, DbConnection, DomainRow, GameAllocationRow, GameScheduleRow, GameServerRow, JobRow, ServerRow } from "@nexus/database";
-import { newId } from "../lib/crypto";
+import { newId, newToken } from "../lib/crypto";
+import { maskEnvTextSecrets } from "../lib/env-text";
 import { errors } from "../lib/errors";
 import type { Backup, CreateGameServerInput, Domain, GameAllocation, GameSchedule, GameServer, GameServerStatus, MinecraftFlavor } from "@nexus/types";
 import type { AppContext } from "../context";
@@ -7,7 +8,6 @@ import { JobQueue } from "../jobs/queue";
 import { eventHub } from "../lib/events";
 import { nextRun, parseCron } from "../lib/cron";
 import { appendResourceLog } from "./resource-logs.service";
-import { newToken } from "../lib/crypto";
 
 /**
  * RCON lets the panel send real server commands to the console (the itzg
@@ -35,6 +35,28 @@ function parseEnv(raw: string | null | undefined): Record<string, string> {
 function ensureRcon(env: Record<string, string>): Record<string, string> {
   if (env.ENABLE_RCON === "TRUE" && env.RCON_PASSWORD) return env;
   return { ...rconDefaults(), ...env };
+}
+
+/** KEY=VALUE lines from a raw .env text (comments and blank lines skipped). */
+function parseRawEnvText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    out[key] = trimmed.slice(eq + 1);
+  }
+  return out;
+}
+
+/** Build KEY=VALUE editor text from a Record, masking the RCON password. */
+function envRecordToText(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([k, v]) => (k === "RCON_PASSWORD" ? `${k}=${String.fromCharCode(0x2022).repeat(Math.max(6, v.length))}` : `${k}=${v}`))
+    .join("\n");
 }
 
 /**
@@ -122,6 +144,7 @@ export function toGameServer(row: GameServerRow): GameServer {
     cpuLimit: row.cpu_limit,
     storageBytes: row.storage_bytes,
     environment,
+    environmentText: row.environment_text ?? null,
     status: row.status as GameServerStatus,
     containerId: row.container_id,
     volumeName: row.volume_name,
@@ -1040,6 +1063,14 @@ export class GameServersService {
     return perms.includes(perm) || perms.includes("*");
   }
 
+  /** Reveal a single environment value (used by the raw .env editor). */
+  async revealEnvValue(id: string, key: string): Promise<{ value: string }> {
+    const row = await this.get(id);
+    const env = parseEnv(row.environment);
+    if (!(key in env)) throw errors.notFound("Environment variable not found");
+    return { value: env[key] };
+  }
+
   /* ── Startup ─────────────────────────────────────────────────── */
 
   /** Compose a human-readable startup command from the env (cosmetic, Pterodactyl-style). */
@@ -1054,25 +1085,41 @@ export class GameServersService {
     image: string;
     images: string[];
     environment: Record<string, string>;
+    environmentText: string | null;
     command: string;
   }> {
     const row = await this.get(id);
     const env = row.environment ? (JSON.parse(row.environment) as Record<string, string>) : {};
     const images = GAME_IMAGES[row.game as keyof typeof GAME_IMAGES]?.versions ?? [];
-    return { image: row.image, images, environment: env, command: this.startupCommand(env, row.port) };
+    return { image: row.image, images, environment: env, environmentText: row.environment_text ?? envRecordToText(env), command: this.startupCommand(env, row.port) };
   }
 
   /** Update the image / environment and re-create the container (volume preserved). */
-  async updateStartup(id: string, input: { image?: string; environment?: Record<string, string> }): Promise<{ gameServer: GameServer; applied: boolean }> {
+  async updateStartup(id: string, input: { image?: string; environment?: Record<string, string>; rawText?: string }): Promise<{ gameServer: GameServer; applied: boolean }> {
     const row = await this.get(id);
     const env = parseEnv(row.environment);
-    const nextEnv = ensureRcon({ ...env, ...(input.environment ?? {}) });
+    // The raw .env editor is the source of truth when it is saved; masked
+    // values (dots) keep the stored value instead of overwriting it.
+    let nextEnv: Record<string, string>;
+    if (input.rawText !== undefined) {
+      const parsed = parseRawEnvText(input.rawText);
+      for (const k of Object.keys(parsed)) {
+        if (/^[\u2022*]+$/.test(parsed[k].trim()) && env[k] !== undefined) parsed[k] = env[k];
+      }
+      nextEnv = ensureRcon(parsed);
+    } else {
+      nextEnv = ensureRcon({ ...env, ...(input.environment ?? {}) });
+    }
     const image = input.image?.trim() || row.image;
     const def = GAME_IMAGES[row.game as keyof typeof GAME_IMAGES];
     if (def && !def.versions.includes(image) && !image.includes(":")) {
       throw errors.validation({ image: `Image must be one of: ${def.versions.join(", ")} or a full image tag` });
     }
-    await this.db.run(`UPDATE game_servers SET image = ?, environment = ?, updated_at = ? WHERE id = ?`, [image, JSON.stringify(nextEnv), new Date().toISOString(), id]);
+    const environmentText = input.rawText !== undefined ? maskEnvTextSecrets(input.rawText, new Set(["RCON_PASSWORD"])) : null;
+    await this.db.run(
+      `UPDATE game_servers SET image = ?, environment = ?, environment_text = COALESCE(?, environment_text), updated_at = ? WHERE id = ?`,
+      [image, JSON.stringify(nextEnv), environmentText, new Date().toISOString(), id],
+    );
 
     // Recreate the container with the new settings (same volume, same port).
     const hub = this.ctx.hub;

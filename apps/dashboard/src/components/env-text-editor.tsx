@@ -47,6 +47,8 @@ export function EnvTextEditor({
   saveUrl,
   revealUrl,
   onSaved,
+  onSave,
+  saveLabel = "Save",
 }: {
   items?: EnvironmentVariable[];
   environmentText?: string | null;
@@ -54,6 +56,9 @@ export function EnvTextEditor({
   saveUrl: (id: string) => string;
   revealUrl: (id: string, envId: string) => string;
   onSaved?: () => void;
+  /** Overrides the default PUT — the caller owns the request, toast and refetch. */
+  onSave?: (variables: { key: string; value: string; isSecret: boolean }[], rawText: string) => Promise<void>;
+  saveLabel?: string;
 }) {
   const { toast } = useToast();
   const [envText, setEnvText] = useState("");
@@ -128,9 +133,13 @@ export function EnvTextEditor({
       .filter((v): v is { key: string; value: string; isSecret: boolean } => v !== null);
     setSavingEnv(true);
     try {
-      await put(saveUrl(resourceId), { variables, rawText: envText });
-      toast("success", "Environment saved", `${variables.length} variables`);
-      onSaved?.();
+      if (onSave) {
+        await onSave(variables, envText);
+      } else {
+        await put(saveUrl(resourceId), { variables, rawText: envText });
+        toast("success", "Environment saved", `${variables.length} variables`);
+        onSaved?.();
+      }
     } catch (err) {
       toast("error", "Save failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -150,7 +159,7 @@ export function EnvTextEditor({
             {envMasked ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />} {envMasked ? "Reveal" : "Hide"}
           </Button>
           <Button size="sm" onClick={saveEnv} disabled={savingEnv}>
-            {savingEnv ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-3.5" />} Save
+            {savingEnv ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-3.5" />} {saveLabel}
           </Button>
         </div>
       </CardHeader>

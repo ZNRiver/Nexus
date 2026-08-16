@@ -304,6 +304,8 @@ export interface GameServerRow {
   cpu_limit: number | null;
   storage_bytes: number;
   environment: string | null;
+  /** Raw .env editor text (comments + ordering). Secret values are masked with dots. */
+  environment_text: string | null;
   status: string;
   container_id: string | null;
   volume_name: string | null;
