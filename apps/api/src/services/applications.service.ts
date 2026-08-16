@@ -48,6 +48,7 @@ export function toApplication(row: ApplicationRow): Application {
     lastDeploymentId: row.last_deployment_id,
     currentImage: row.current_image,
     currentContainerId: row.current_container_id,
+    environmentText: row.environment_text ?? null,
     backupSchedule: {
       enabled: !!row.backup_schedule_enabled,
       cron: row.backup_schedule_cron ?? "0 2 * * *",
@@ -58,6 +59,25 @@ export function toApplication(row: ApplicationRow): Application {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** Replace values of secret keys in a raw .env text with dots, keeping comments and ordering. */
+function maskEnvTextSecrets(text: string, secretKeys: Set<string>): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return line;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) return line;
+      const key = trimmed.slice(0, eq).trim();
+      if (!secretKeys.has(key)) return line;
+      const value = trimmed.slice(eq + 1);
+      if (value.length === 0) return line;
+      if (/^[\u2022*]+$/.test(value.trim())) return line; // already masked
+      return `${trimmed.slice(0, eq + 1)}${String.fromCharCode(0x2022).repeat(Math.max(6, value.length))}`;
+    })
+    .join("\n");
 }
 
 export class ApplicationsService {
@@ -173,6 +193,7 @@ export class ApplicationsService {
       backup_retention: 7,
       backup_next_run_at: null,
       backup_last_run_at: null,
+      environment_text: null,
       created_at: now,
       updated_at: now,
     };
@@ -351,7 +372,7 @@ export class ApplicationsService {
   }
 
   /** Replace the whole env map from a text-editor save (KEY=VALUE lines). */
-  async syncEnvVars(applicationId: string, variables: { key: string; value: string; isSecret?: boolean }[]): Promise<EnvironmentVariable[]> {
+  async syncEnvVars(applicationId: string, variables: { key: string; value: string; isSecret?: boolean }[], rawText?: string): Promise<EnvironmentVariable[]> {
     await this.get(applicationId);
     const now = new Date().toISOString();
     const seen = new Set<string>();
@@ -389,6 +410,11 @@ export class ApplicationsService {
         await tx.run(`DELETE FROM environment_variables WHERE application_id = ?`, [applicationId]);
       } else {
         await tx.run(`DELETE FROM environment_variables WHERE application_id = ? AND var_key NOT IN (${keys.map(() => "?").join(",")})`, [applicationId, ...keys]);
+      }
+      // Persist the raw editor text (comments + ordering). Secret values are masked server-side.
+      if (rawText !== undefined) {
+        const secretKeys = new Set(variables.filter((v) => v.isSecret).map((v) => v.key.trim()).filter(Boolean));
+        await tx.run(`UPDATE applications SET environment_text = ?, updated_at = ? WHERE id = ?`, [maskEnvTextSecrets(rawText, secretKeys), now, applicationId]);
       }
       return saved;
     });

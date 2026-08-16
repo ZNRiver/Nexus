@@ -201,9 +201,9 @@ export function registerApplicationRoutes(app: App, ctx: AppContext): void {
 
   app.put("/api/v1/applications/:id/environment", requireAuth, requirePermission("application.write"), async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const parsed = z.object({ variables: z.array(z.object({ key: z.string().min(1), value: z.string(), isSecret: z.boolean().optional() })) }).safeParse(body);
+    const parsed = z.object({ variables: z.array(z.object({ key: z.string().min(1), value: z.string(), isSecret: z.boolean().optional() })), rawText: z.string().optional() }).safeParse(body);
     if (!parsed.success) throw errors.validation(parsed.error.flatten());
-    const variables = await apps.syncEnvVars(pid(c), parsed.data.variables);
+    const variables = await apps.syncEnvVars(pid(c), parsed.data.variables, parsed.data.rawText);
     return c.json({ success: true, variables });
   });
 

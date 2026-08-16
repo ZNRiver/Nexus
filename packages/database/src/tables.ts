@@ -112,6 +112,8 @@ export interface ApplicationRow {
   backup_retention: number;
   backup_next_run_at: string | null;
   backup_last_run_at: string | null;
+  /** Raw .env editor text (comments + ordering). Secret values are masked with dots. */
+  environment_text: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -62,6 +62,24 @@ function detectProvider(repo: string): Provider {
   return "Git";
 }
 
+/** Replace the values of secret keys in a raw env text with dots, keeping comments and ordering. */
+function maskSecretLines(text: string, secretKeys: Record<string, boolean>): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) return line;
+      const key = trimmed.slice(0, eq).trim();
+      if (!secretKeys[key]) return line;
+      const value = trimmed.slice(eq + 1);
+      if (value.length === 0) return line;
+      if (/^[\u2022*]+$/.test(value.trim())) return line; // already masked
+      return `${trimmed.slice(0, eq + 1)}${String.fromCharCode(0x2022).repeat(Math.max(6, value.length))}`;
+    })
+    .join("\n");
+}
+
 export function ApplicationDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -329,11 +347,11 @@ export function ApplicationDetailPage() {
       })
       .join("\n");
 
-  // Initialize the editor once the env list arrives.
+  // Initialize the editor once the env list arrives — prefer the stored raw .env text.
   useEffect(() => {
-    if (data?.environment && !envInit) {
-      setEnvText(buildEnvText(data.environment, revealedEnv, true));
-      setEnvSecretKeys(Object.fromEntries(data.environment.map((e) => [e.key, e.isSecret])));
+    if (!envInit && (data?.application?.environmentText != null || data?.environment)) {
+      setEnvText(data.application.environmentText ?? buildEnvText(data.environment ?? [], revealedEnv, true));
+      setEnvSecretKeys(Object.fromEntries((data.environment ?? []).map((e) => [e.key, e.isSecret])));
       setEnvInit(true);
     }
   }, [data, envInit]);
@@ -341,12 +359,22 @@ export function ApplicationDetailPage() {
   const revealEnv = async (env: EnvironmentVariable) => {
     try {
       const res = await post<{ value: string }>(`/applications/${id}/environment/${env.id}/reveal`);
-      setRevealedEnv((r) => {
-        const next = { ...r, [env.id]: res.value };
-        // Refresh the editor with the real value for this line.
-        setEnvText(buildEnvText(data?.environment ?? [], next, false));
-        return next;
-      });
+      setRevealedEnv((r) => ({ ...r, [env.id]: res.value }));
+      // Swap the masked dots for the real value on that line only, keeping comments and order.
+      setEnvText((text) =>
+        text
+          .split("\n")
+          .map((line) => {
+            const trimmed = line.trim();
+            const eq = trimmed.indexOf("=");
+            if (eq <= 0) return line;
+            if (trimmed.slice(0, eq).trim() !== env.key) return line;
+            const value = trimmed.slice(eq + 1);
+            if (!/^[\u2022*]+$/.test(value.trim())) return line; // only swap masked values
+            return `${trimmed.slice(0, eq + 1)}${res.value}`;
+          })
+          .join("\n"),
+      );
     } catch (err) {
       toast("error", "Reveal failed", err instanceof Error ? err.message : "Unknown error");
     }
@@ -359,7 +387,9 @@ export function ApplicationDetailPage() {
       setEnvMasked(false);
     } else {
       setEnvMasked(true);
-      setEnvText(buildEnvText(data?.environment ?? [], revealedEnv, true));
+      // Re-mask every secret line in place, keeping comments and ordering.
+      setEnvText((text) => maskSecretLines(text, envSecretKeys));
+      setRevealedEnv({});
     }
   };
 
@@ -380,7 +410,7 @@ export function ApplicationDetailPage() {
       .filter((v): v is { key: string; value: string; isSecret: boolean } => v !== null);
     setSavingEnv(true);
     try {
-      await put(`/applications/${id}/environment`, { variables });
+      await put(`/applications/${id}/environment`, { variables, rawText: envText });
       queryClient.invalidateQueries({ queryKey: ["application-detail", id] });
       toast("success", "Environment saved", `${variables.length} variables`);
     } catch (err) {
@@ -935,7 +965,7 @@ export function ApplicationDetailPage() {
                   </div>
                 </div>
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Lines starting with <code className="rounded bg-muted px-1 font-mono">#</code> are ignored. Secrets stay encrypted at rest and are shown as dots until you press Reveal — saving with dots keeps the stored value.
+                  Comments (<code className="rounded bg-muted px-1 font-mono">#</code>) and line order are preserved. Secrets stay encrypted at rest and are shown as dots until you press Reveal — saving with dots keeps the stored value.
                 </p>
               </CardContent>
             </Card>
