@@ -11,5 +11,4 @@ data
 *.log
 apps/dashboard/dist
 apps/api/data
-
 .tmp

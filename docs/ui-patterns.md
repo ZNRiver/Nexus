@@ -85,7 +85,7 @@ Field pattern: `space-y-1.5` wrapper, `Label` (`text-[13px]` in dense modals), t
 
 ## 2. Selects
 
-Component: `src/components/ui/custom-select.tsx` — ported from the  `CustomSelect`. **Native `<select>` elements are not used anywhere in the app** (the old `components/ui/select.tsx` was removed). If you find a native select, replace it with `CustomSelect`.
+Component: `src/components/ui/custom-select.tsx` — the app's select control. **Native `<select>` elements are not used anywhere in the app** (the old `components/ui/select.tsx` was removed). If you find a native select, replace it with `CustomSelect`.
 
 ### Usage
 
@@ -109,7 +109,7 @@ Component: `src/components/ui/custom-select.tsx` — ported from the  `CustomSel
 - Trigger styled to match inputs: `h-[42px]`, `rounded-lg`, `bg-muted/40`, `border-input`, chevron rotates when open.
 - Menu renders in a **portal** (`z-[10050]`) positioned under the trigger, **flips above** when there is no room, tracks scroll/resize.
 - Selected option shows a `Check`; keyboard `Escape` and click-outside close it.
-- `footerAction` and `onOpen` (lazy-load) props are available — see the  original for the API.
+- `footerAction` and `onOpen` (lazy-load) props are available for menu footer actions and lazy-loading options.
 
 ---
 
