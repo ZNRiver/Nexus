@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { post } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -11,7 +11,7 @@ import { Logo } from "@/components/logo";
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const { refetch } = useAuth();
+  const { refetch, setup } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -57,6 +57,14 @@ export function LoginPage() {
             </form>
           </CardContent>
         </Card>
+        {!setup.completed && (
+          <p className="mt-4 text-center text-sm text-muted-foreground">
+            No account yet?{" "}
+            <Link to="/setup" className="font-medium text-primary hover:underline">
+              Create the administrator account
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );
