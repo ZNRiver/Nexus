@@ -30,6 +30,9 @@ services:
       ADMIN_NAME: ${ADMIN_NAME:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Secure session cookies require HTTPS. Set COOKIE_SECURE=false in .env
+      # when serving over plain HTTP.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
       API_URL: http://localhost:8080
       AGENT_DATA_DIR: /opt/nexus/agent
       NEXUS_DB_PATH: /data/nexus
