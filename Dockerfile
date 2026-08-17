@@ -41,8 +41,27 @@ COPY --from=builder /app/apps/agent ./apps/agent
 COPY --from=builder /app/apps/dashboard/dist ./apps/dashboard/dist
 COPY --from=builder /app/package.json ./package.json
 
+# Docker CLI: the local agent talks to the host engine through the mounted
+# /var/run/docker.sock using the `docker` binary. Install the static client.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) DOCKER_ARCH=x86_64 ;; \
+      arm64) DOCKER_ARCH=aarch64 ;; \
+      *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl ca-certificates; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-27.3.1.tgz" -o /tmp/docker.tgz; \
+    tar -xzf /tmp/docker.tgz -C /tmp; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker /tmp/docker.tgz; \
+    apt-get purge -y curl; \
+    apt-get autoremove -y; \
+    rm -rf /var/lib/apt/lists/*
+
 # Runtime data (SQLite dev / agent workdir / backups live here).
-RUN mkdir -p /data/nexus /opt/nexus/agent/work /opt/nexus/agent/backups
+RUN mkdir -p /data/nexus /opt/nexus/agent/work /opt/nexus/agent/backups /app/data/agent
 
 EXPOSE 8080
 
