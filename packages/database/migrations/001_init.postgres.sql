@@ -221,6 +221,28 @@ CREATE TABLE IF NOT EXISTS domains (
 );
 CREATE INDEX IF NOT EXISTS idx_domains_app ON domains(application_id);
 
+CREATE TABLE IF NOT EXISTS game_servers (
+  id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  game TEXT NOT NULL DEFAULT 'MINECRAFT',
+  version TEXT NOT NULL,
+  flavor TEXT,
+  image TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  memory_bytes BIGINT NOT NULL,
+  cpu_limit DOUBLE PRECISION,
+  storage_bytes BIGINT NOT NULL,
+  environment TEXT,
+  status TEXT NOT NULL DEFAULT 'CREATING',
+  container_id TEXT,
+  volume_name TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_games_server ON game_servers(server_id);
+
 CREATE TABLE IF NOT EXISTS environment_variables (
   id TEXT PRIMARY KEY,
   application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
@@ -291,28 +313,6 @@ CREATE TABLE IF NOT EXISTS monitoring_metrics (
   payload TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_server_ts ON monitoring_metrics(server_id, ts);
-
-CREATE TABLE IF NOT EXISTS game_servers (
-  id TEXT PRIMARY KEY,
-  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-  name TEXT NOT NULL,
-  game TEXT NOT NULL DEFAULT 'MINECRAFT',
-  version TEXT NOT NULL,
-  flavor TEXT,
-  image TEXT NOT NULL,
-  port INTEGER NOT NULL,
-  memory_bytes BIGINT NOT NULL,
-  cpu_limit DOUBLE PRECISION,
-  storage_bytes BIGINT NOT NULL,
-  environment TEXT,
-  status TEXT NOT NULL DEFAULT 'CREATING',
-  container_id TEXT,
-  volume_name TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_games_server ON game_servers(server_id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,

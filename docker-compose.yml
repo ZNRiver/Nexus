@@ -19,8 +19,9 @@ services:
       - "8080:8080"
     environment:
       NODE_ENV: production
-      # Production → PostgreSQL. Set to a sqlite: path for a single-file dev DB.
-      DATABASE_URL: ${DATABASE_URL:-postgresql://nexus:nexus@postgres:5432/nexus}
+      # Fixed to the compose `postgres` service: inside the container the DB is
+      # reached by service hostname, not by a host-local .env value.
+      DATABASE_URL: postgresql://nexus:nexus@postgres:5432/nexus
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in your .env}
