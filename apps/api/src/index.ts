@@ -318,7 +318,7 @@ setInterval(() => {
     );
     for (const s of stale) {
       await db.run(`UPDATE servers SET status = 'OFFLINE', updated_at = ? WHERE id = ?`, [new Date().toISOString(), s.id]);
-      await db.run(`UPDATE server_agents SET connected = 0 WHERE server_id = ?`, [s.id]);
+      await db.run(`UPDATE server_agents SET connected = FALSE WHERE server_id = ?`, [s.id]);
       eventHub.emit({ type: "server.status", serverId: s.id, status: "OFFLINE" });
       log.warn("server marked offline (stale heartbeat)", { serverId: s.id, name: s.name });
       const owner = await db.get<{ id: string }>(`SELECT id FROM users ORDER BY created_at LIMIT 1`);

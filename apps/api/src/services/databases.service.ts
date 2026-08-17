@@ -897,7 +897,7 @@ export class DatabasesService {
   async runDueBackups(): Promise<number> {
     const now = new Date();
     const rows = await this.db.all<DatabaseRow>(
-      `SELECT * FROM databases WHERE backup_schedule_enabled = 1 AND backup_next_run_at IS NOT NULL AND backup_next_run_at <= ?`,
+      `SELECT * FROM databases WHERE backup_schedule_enabled = TRUE AND backup_next_run_at IS NOT NULL AND backup_next_run_at <= ?`,
       [now.toISOString()],
     );
     let started = 0;
@@ -905,7 +905,7 @@ export class DatabasesService {
       const parsed = parseCron(row.backup_schedule_cron ?? "0 2 * * *");
       if (!parsed) {
         // Corrupt schedule — disable so the row stops being picked up.
-        await this.db.run(`UPDATE databases SET backup_schedule_enabled = 0, backup_next_run_at = NULL WHERE id = ?`, [row.id]);
+        await this.db.run(`UPDATE databases SET backup_schedule_enabled = FALSE, backup_next_run_at = NULL WHERE id = ?`, [row.id]);
         continue;
       }
       const backup = await this.createBackup(row.id, { scheduled: true });

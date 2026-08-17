@@ -43,17 +43,17 @@ export class NotificationsService {
 
   async unreadCount(userId: string): Promise<number> {
     const row = await this.db.get<{ c: number }>(
-      `SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0`,
+      `SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = FALSE`,
       [userId],
     );
     return Number(row?.c ?? 0);
   }
 
   async markRead(userId: string, id: string): Promise<void> {
-    await this.db.run(`UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?`, [id, userId]);
+    await this.db.run(`UPDATE notifications SET read = TRUE WHERE id = ? AND user_id = ?`, [id, userId]);
   }
 
   async markAllRead(userId: string): Promise<void> {
-    await this.db.run(`UPDATE notifications SET read = 1 WHERE user_id = ?`, [userId]);
+    await this.db.run(`UPDATE notifications SET read = TRUE WHERE user_id = ?`, [userId]);
   }
 }

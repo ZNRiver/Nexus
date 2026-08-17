@@ -83,7 +83,7 @@ export class AgentHub {
       `UPDATE servers SET status = 'ONLINE', agent_version = ?, last_heartbeat_at = ?, last_error = NULL, updated_at = ? WHERE id = ?`,
       [version, new Date().toISOString(), new Date().toISOString(), serverId],
     );
-    await this.db.run(`UPDATE server_agents SET connected = 1, last_seen_at = ?, version = ? WHERE server_id = ?`, [
+    await this.db.run(`UPDATE server_agents SET connected = TRUE, last_seen_at = ?, version = ? WHERE server_id = ?`, [
       new Date().toISOString(),
       version,
       serverId,
@@ -109,7 +109,7 @@ export class AgentHub {
     if (!conn) return;
     this.rejectAll(conn, errors.serverOffline("Agent disconnected"));
     this.connections.delete(serverId);
-    void this.db.run(`UPDATE server_agents SET connected = 0 WHERE server_id = ?`, [serverId]);
+    void this.db.run(`UPDATE server_agents SET connected = FALSE WHERE server_id = ?`, [serverId]);
     // Any live log streams on this server just died — tell subscribers so the
     // dashboards fall back to re-seeding / re-subscribing.
     void import("../websocket/log-streams").then(({ handleAgentDisconnect }) => handleAgentDisconnect(serverId));

@@ -1183,7 +1183,7 @@ export class GameServersService {
       [domainId, id, h, isPrimary ? 1 : 0, sslEnabled ? 1 : 0, sslEnabled ? "PENDING" : "DISABLED", new Date().toISOString()],
     );
     if (isPrimary) {
-      await this.db.run(`UPDATE domains SET is_primary = 0 WHERE game_server_id = ? AND id != ?`, [id, domainId]);
+      await this.db.run(`UPDATE domains SET is_primary = FALSE WHERE game_server_id = ? AND id != ?`, [id, domainId]);
     }
     await this.ctx.audit({ action: "domain.create", resourceType: "domain", resourceId: domainId, resourceName: h, serverId: row.server_id });
     return { id: domainId, applicationId: null, gameServerId: id, hostname: h, isPrimary, sslEnabled, sslStatus: sslEnabled ? "PENDING" : "DISABLED", createdAt: new Date().toISOString() };

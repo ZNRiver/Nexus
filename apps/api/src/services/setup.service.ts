@@ -134,6 +134,6 @@ export class SetupService {
   }
 
   async revokeAgent(serverId: string): Promise<void> {
-    await this.db.run(`UPDATE server_agents SET revoked_at = ?, connected = 0 WHERE server_id = ?`, [new Date().toISOString(), serverId]);
+    await this.db.run(`UPDATE server_agents SET revoked_at = ?, connected = FALSE WHERE server_id = ?`, [new Date().toISOString(), serverId]);
   }
 }

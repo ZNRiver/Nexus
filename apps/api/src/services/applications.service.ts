@@ -469,7 +469,7 @@ export class ApplicationsService {
       [id, applicationId, h, isPrimary ? 1 : 0, sslEnabled ? 1 : 0, sslEnabled ? "PENDING" : "DISABLED", new Date().toISOString()],
     );
     if (isPrimary) {
-      await this.db.run(`UPDATE domains SET is_primary = 0 WHERE application_id = ? AND id != ?`, [applicationId, id]);
+      await this.db.run(`UPDATE domains SET is_primary = FALSE WHERE application_id = ? AND id != ?`, [applicationId, id]);
     }
     await this.ctx.audit({ action: "domain.create", resourceType: "domain", resourceId: id, resourceName: h, serverId: null });
     return { id, applicationId, gameServerId: null, hostname: h, isPrimary, sslEnabled, sslStatus: sslEnabled ? "PENDING" : "DISABLED", createdAt: new Date().toISOString() };
@@ -647,19 +647,19 @@ export class ApplicationsService {
   async runDueBackups(): Promise<number> {
     const now = new Date();
     const rows = await this.db.all<ApplicationRow>(
-      `SELECT * FROM applications WHERE backup_schedule_enabled = 1 AND backup_next_run_at IS NOT NULL AND backup_next_run_at <= ?`,
+      `SELECT * FROM applications WHERE backup_schedule_enabled = TRUE AND backup_next_run_at IS NOT NULL AND backup_next_run_at <= ?`,
       [now.toISOString()],
     );
     let started = 0;
     for (const row of rows) {
       const parsed = parseCron(row.backup_schedule_cron ?? "0 2 * * *");
       if (!parsed) {
-        await this.db.run(`UPDATE applications SET backup_schedule_enabled = 0, backup_next_run_at = NULL WHERE id = ?`, [row.id]);
+        await this.db.run(`UPDATE applications SET backup_schedule_enabled = FALSE, backup_next_run_at = NULL WHERE id = ?`, [row.id]);
         continue;
       }
       if (!row.volume_name) {
         // No volume — can't back up. Disable so the row stops being picked up.
-        await this.db.run(`UPDATE applications SET backup_schedule_enabled = 0, backup_next_run_at = NULL WHERE id = ?`, [row.id]);
+        await this.db.run(`UPDATE applications SET backup_schedule_enabled = FALSE, backup_next_run_at = NULL WHERE id = ?`, [row.id]);
         continue;
       }
       const backup = await this.createBackup(row.id, { scheduled: true });

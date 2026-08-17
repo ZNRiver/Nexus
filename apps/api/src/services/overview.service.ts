@@ -22,7 +22,7 @@ export class OverviewService {
       db.all<{ c: number }>(`SELECT COUNT(*) as c FROM containers`),
       db.all<{ status: string; c: number }>(`SELECT status, COUNT(*) as c FROM application_deployments GROUP BY status`),
       new JobQueue(db).pendingCount(),
-      db.get<{ c: number }>(`SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0`, [userId]),
+      db.get<{ c: number }>(`SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = FALSE`, [userId]),
     ]);
 
     const onlineServers = servers.filter((s) => s.status === "ONLINE");
