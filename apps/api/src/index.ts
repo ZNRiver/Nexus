@@ -10,16 +10,36 @@ const log = createLogger("api", { pretty: true });
 const db = createDb(config.databaseUrl);
 await migrate(db);
 
-// Optional first-run bootstrap: create the owner account from .env when no
-// user exists yet, so a fresh install needs no browser setup.
+// Optional first-run bootstrap: when ADMIN_* is set and no user exists yet,
+// create the owner account and the Local Server from .env — a fresh install
+// needs no browser setup at all.
 if (config.admin.email && config.admin.password) {
   const { SetupService } = await import("./services/setup.service");
-  const admin = await new SetupService(db).ensureAdmin({
+  const setupService = new SetupService(db);
+  const admin = await setupService.ensureAdmin({
     name: config.admin.name ?? "Administrator",
     email: config.admin.email,
     password: config.admin.password,
   });
   if (admin) log.info("admin account created from environment", { email: admin.email });
+  const os = await import("node:os");
+  const local = await setupService.ensureLocalServer({
+    hostname: os.hostname(),
+    os: os.platform(),
+    platform: os.platform(),
+    arch: os.arch(),
+    cpuModel: os.cpus()[0]?.model,
+    cpuCores: os.cpus().length,
+    memoryTotalBytes: os.totalmem(),
+    memoryFreeBytes: os.freemem(),
+    diskTotalBytes: undefined,
+    diskFreeBytes: undefined,
+    dockerVersion: null,
+    dockerAvailable: false,
+    kernel: os.release(),
+    uptimeSeconds: os.uptime(),
+  });
+  if (local) log.info("local server created from environment", { serverId: local.server.id });
 }
 
 const { AgentHub } = await import("./agents/hub");

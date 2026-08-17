@@ -46,6 +46,57 @@ export class SetupService {
     return user;
   }
 
+  /** Create the Local Server from host detection (env bootstrap path). */
+  async ensureLocalServer(system: ServerSystemInfo): Promise<{ server: ServerRow; agentToken: string } | null> {
+    const state = await this.state();
+    if (state.localServerCreated) return null;
+    let agentToken = "";
+    const server = await this.db.transaction(async (tx) => {
+      agentToken = newToken(48);
+      const now = new Date().toISOString();
+      const row: ServerRow = {
+        id: newId("srv"),
+        name: "Local Server",
+        type: "local",
+        host: "localhost",
+        port: 22,
+        username: process.env.USER ?? process.env.USERNAME ?? "root",
+        auth_method: "password",
+        auth_data_encrypted: null,
+        status: "INSTALLING",
+        agent_id: newId("agt"),
+        agent_token_encrypted: encrypt(agentToken, process.env.ENCRYPTION_KEY ?? "dev-encryption-key-not-for-production"),
+        agent_version: "0.1.0",
+        agent_api_url: null,
+        os: system.os,
+        arch: system.arch,
+        hostname: system.hostname,
+        cpu_model: system.cpuModel ?? null,
+        cpu_cores: system.cpuCores ?? null,
+        memory_total_bytes: system.memoryTotalBytes ?? null,
+        disk_total_bytes: system.diskTotalBytes ?? null,
+        docker_version: system.dockerVersion ?? null,
+        docker_available: system.dockerAvailable ? 1 : 0,
+        last_heartbeat_at: null,
+        last_error: null,
+        created_at: now,
+        updated_at: now,
+      };
+      await tx.run(
+        `INSERT INTO servers (id, name, type, host, port, username, auth_method, auth_data_encrypted, status, agent_id, agent_token_encrypted, agent_version, os, arch, hostname, cpu_model, cpu_cores, memory_total_bytes, disk_total_bytes, docker_version, docker_available, last_heartbeat_at, last_error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [row.id, row.name, row.type, row.host, row.port, row.username, row.auth_method, row.auth_data_encrypted, row.status, row.agent_id, row.agent_token_encrypted, row.agent_version, row.os, row.arch, row.hostname, row.cpu_model, row.cpu_cores, row.memory_total_bytes, row.disk_total_bytes, row.docker_version, row.docker_available, row.last_heartbeat_at, row.last_error, row.created_at, row.updated_at],
+      );
+      await tx.run(
+        `INSERT INTO server_agents (id, server_id, agent_id, token_hash, version, connected, last_seen_at, revoked_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [newId("sag"), row.id, row.agent_id, hashToken(agentToken), "0.1.0", 0, null, null, now],
+      );
+      return row;
+    });
+    return { server, agentToken };
+  }
+
   async createAdminAndLocalServer(input: {
     name: string;
     email: string;
