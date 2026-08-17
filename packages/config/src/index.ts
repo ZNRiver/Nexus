@@ -27,6 +27,9 @@ export interface NexusConfig {
   sessionSecret: string;
   encryptionKey: string;
 
+  /** Optional first-run admin bootstrap from env (no browser setup needed). */
+  admin: { name: string | null; email: string | null; password: string | null };
+
   agentApiUrl: string;
   dockerHost?: string | null;
 
@@ -103,6 +106,12 @@ export function getConfig(overrides: Record<string, string> = {}): NexusConfig {
     sessionSecret: env.SESSION_SECRET ?? "dev-session-secret-not-for-production",
     encryptionKey: env.ENCRYPTION_KEY ?? "dev-encryption-key-not-for-production",
 
+    admin: {
+      name: env.ADMIN_NAME?.trim() || null,
+      email: env.ADMIN_EMAIL?.trim() || null,
+      password: env.ADMIN_PASSWORD?.trim() || null,
+    },
+
     agentApiUrl: env.AGENT_API_URL ?? "http://localhost:8080",
     dockerHost: env.DOCKER_HOST ?? null,
 
@@ -116,6 +125,15 @@ export function getConfig(overrides: Record<string, string> = {}): NexusConfig {
 
   if (isProd && isSqlite) {
     throw new Error("Production cannot use the SQLite database. Set DATABASE_URL to PostgreSQL.");
+  }
+
+  const adminEmail = config.admin.email;
+  const adminPassword = config.admin.password;
+  if (adminPassword && adminPassword.length < 8) {
+    throw new Error("ADMIN_PASSWORD must be at least 8 characters");
+  }
+  if (!!adminEmail !== !!adminPassword) {
+    throw new Error("ADMIN_EMAIL and ADMIN_PASSWORD must be set together");
   }
 
   log.info("configuration loaded", { env: nodeEnv, database: isSqlite ? "sqlite" : "postgres", redis: config.redisUrl ? "yes" : "no" });

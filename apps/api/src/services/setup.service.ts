@@ -20,6 +20,32 @@ export class SetupService {
     return { adminCreated, localServerCreated, completed: adminCreated && localServerCreated };
   }
 
+  /** Create the owner account from env-provided credentials (no Local Server). */
+  async ensureAdmin(input: { name: string; email: string; password: string }): Promise<UserRow | null> {
+    const state = await this.state();
+    if (state.adminCreated) return null;
+    const email = input.email.trim().toLowerCase();
+    const existing = await this.db.get<UserRow>(`SELECT id FROM users WHERE email = ?`, [email]);
+    if (existing) return existing;
+    if (input.password.length < 8) throw errors.validation({ password: "Password must be at least 8 characters" });
+    const passwordHash = await Bun.password.hash(input.password, { algorithm: "argon2id", memoryCost: 65536, timeCost: 3 });
+    const now = new Date().toISOString();
+    const user: UserRow = {
+      id: newId("usr"),
+      name: input.name.trim() || "Administrator",
+      email,
+      password_hash: passwordHash,
+      role: "owner",
+      created_at: now,
+      updated_at: now,
+    };
+    await this.db.run(
+      `INSERT INTO users (id, name, email, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [user.id, user.name, user.email, user.password_hash, user.role, user.created_at, user.updated_at],
+    );
+    return user;
+  }
+
   async createAdminAndLocalServer(input: {
     name: string;
     email: string;

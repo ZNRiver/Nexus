@@ -26,6 +26,10 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in your .env}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in your .env}
+      # Optional: create the owner account on first startup when no user exists.
+      ADMIN_NAME: ${ADMIN_NAME:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       API_URL: http://localhost:8080
       AGENT_DATA_DIR: /opt/nexus/agent
       NEXUS_DB_PATH: /data/nexus

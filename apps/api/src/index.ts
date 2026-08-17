@@ -10,6 +10,18 @@ const log = createLogger("api", { pretty: true });
 const db = createDb(config.databaseUrl);
 await migrate(db);
 
+// Optional first-run bootstrap: create the owner account from .env when no
+// user exists yet, so a fresh install needs no browser setup.
+if (config.admin.email && config.admin.password) {
+  const { SetupService } = await import("./services/setup.service");
+  const admin = await new SetupService(db).ensureAdmin({
+    name: config.admin.name ?? "Administrator",
+    email: config.admin.email,
+    password: config.admin.password,
+  });
+  if (admin) log.info("admin account created from environment", { email: admin.email });
+}
+
 const { AgentHub } = await import("./agents/hub");
 const hub = new AgentHub(db);
 
